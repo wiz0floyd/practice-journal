@@ -1,3 +1,14 @@
 node_modules
 dist
 coverage
+
+# Claude Code project settings
+.claude/
+
+# Local env files
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
