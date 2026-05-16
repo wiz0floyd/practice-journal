@@ -4,6 +4,7 @@ import {
   isDue, formatDue, draftValid, emptyDraft, newId, shuffle,
   advanceBucket, encodeWAV, syncCards, KEYS, load, save,
 } from "./src/lib/sr.js";
+import { supabase } from "./src/lib/supabase.js";
 
 const longDate = () => new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
 
@@ -234,10 +235,55 @@ function Page({ children }) {
   );
 }
 
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+function useAuth() {
+  const [user, setUser] = useState(null);
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
+      setUser(session?.user ?? null);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+  const signIn = () => supabase?.auth.signInWithOAuth({
+    provider: "google",
+    options: { redirectTo: window.location.origin + import.meta.env.BASE_URL },
+  });
+  const signOut = () => supabase?.auth.signOut();
+  return { user, signIn, signOut };
+}
+
+function AccountButton({ user, signIn, signOut }) {
+  if (!supabase) return null;
+  if (!user) return (
+    <button onClick={signIn} style={{
+      fontFamily: F.stamp, fontSize: "0.58rem", letterSpacing: "0.1em",
+      textTransform: "uppercase", color: C.action, background: "none",
+      border: `1px solid ${C.action}`, borderRadius: "2px",
+      padding: "0.25rem 0.5rem", cursor: "pointer",
+    }}>
+      Sign in
+    </button>
+  );
+  return (
+    <img
+      src={user.user_metadata?.avatar_url}
+      alt={user.user_metadata?.full_name ?? "Account"}
+      title={`${user.user_metadata?.full_name ?? user.email} · click to sign out`}
+      onClick={signOut}
+      style={{ width: 28, height: 28, borderRadius: "50%", cursor: "pointer",
+               border: `2px solid ${C.rule}`, display: "block" }}
+    />
+  );
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
   useFonts();
+  const { user, signIn, signOut } = useAuth();
 
   const [items,         setItems]         = useState(() => load(KEYS.items,   DEFAULT_EXCERPTS));
   const [cards,         setCards]         = useState(() => syncCards(load(KEYS.items, DEFAULT_EXCERPTS), load(KEYS.cards, [])));
@@ -327,9 +373,12 @@ export default function App() {
 
   if (view === "dash") return (
     <Page>
-      <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.16em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.4rem" }}>
-        Practice Journal
-      </p>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.4rem" }}>
+        <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.16em", textTransform: "uppercase", color: C.inkFaint, margin: 0 }}>
+          Practice Journal
+        </p>
+        <AccountButton user={user} signIn={signIn} signOut={signOut} />
+      </div>
       <h1 style={{ fontFamily: F.display, fontSize: "2rem", fontWeight: 700, color: C.ink, lineHeight: 1.1 }}>
         {longDate()}
       </h1>
