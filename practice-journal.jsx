@@ -236,23 +236,31 @@ function Page({ children }) {
   );
 }
 
-<<<<<<< HEAD
 // ── Cloud sync ────────────────────────────────────────────────────────────────
 
-function useSync(user, setItems, setCards, setContext) {
+function useSync(user, setItems, setCards, setContext, items, serverDataRef) {
   useEffect(() => {
     if (!user) return;
-    pullUserData().then((updates) => {
+    pullUserData(user).then((updates) => {
       if (!updates) return;
-      if (updates[KEYS.items]   !== undefined) setItems(updates[KEYS.items]);
-      if (updates[KEYS.cards]   !== undefined) setCards(updates[KEYS.cards]);
-      if (updates[KEYS.context] !== undefined) setContext(updates[KEYS.context]);
+      if (updates[KEYS.items] !== undefined) {
+        serverDataRef.current[KEYS.items] = updates[KEYS.items];
+        setItems(updates[KEYS.items]);
+      }
+      if (updates[KEYS.cards] !== undefined) {
+        const effectiveItems = updates[KEYS.items] ?? items;
+        const reconciledCards = syncCards(effectiveItems, updates[KEYS.cards]);
+        serverDataRef.current[KEYS.cards] = reconciledCards;
+        setCards(reconciledCards);
+      }
+      if (updates[KEYS.context] !== undefined) {
+        serverDataRef.current[KEYS.context] = updates[KEYS.context];
+        setContext(updates[KEYS.context]);
+      }
     });
   }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
-=======
->>>>>>> origin/main
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 function useAuth() {
@@ -324,11 +332,34 @@ export default function App() {
   const userRef = useRef(user);
   useEffect(() => { userRef.current = user; });
 
-  useSync(user, setItems, setCards, setContext);
+  // Tracks server-applied values by reference to suppress round-trip upserts.
+  const serverDataRef = useRef({});
+  // Guards against upserts on first render (state loaded from localStorage, not mutated).
+  // Must be set by the effect declared AFTER the save effects so it flips to true
+  // only after the first render's save effects have already run.
+  const isMounted = useRef(false);
 
-  useEffect(() => { save(KEYS.items,   items);   stampAndUpsert(KEYS.items,   items,   userRef.current); }, [items]);
-  useEffect(() => { save(KEYS.cards,   cards);   stampAndUpsert(KEYS.cards,   cards,   userRef.current); }, [cards]);
-  useEffect(() => { save(KEYS.context, context); stampAndUpsert(KEYS.context, context, userRef.current); }, [context]);
+  useSync(user, setItems, setCards, setContext, items, serverDataRef);
+
+  useEffect(() => {
+    save(KEYS.items, items);
+    if (!isMounted.current) return;
+    if (items === serverDataRef.current[KEYS.items]) { delete serverDataRef.current[KEYS.items]; return; }
+    stampAndUpsert(KEYS.items, items, userRef.current);
+  }, [items]);
+  useEffect(() => {
+    save(KEYS.cards, cards);
+    if (!isMounted.current) return;
+    if (cards === serverDataRef.current[KEYS.cards]) { delete serverDataRef.current[KEYS.cards]; return; }
+    stampAndUpsert(KEYS.cards, cards, userRef.current);
+  }, [cards]);
+  useEffect(() => {
+    save(KEYS.context, context);
+    if (!isMounted.current) return;
+    if (context === serverDataRef.current[KEYS.context]) { delete serverDataRef.current[KEYS.context]; return; }
+    stampAndUpsert(KEYS.context, context, userRef.current);
+  }, [context]);
+  useEffect(() => { isMounted.current = true; }, []);
 
   const dueCards = cards.filter(isDue);
   const card     = queue[idx];
