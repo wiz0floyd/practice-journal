@@ -14,7 +14,7 @@ export function mergeServerLocal(serverRows, localMeta) {
   const updates = {};
   for (const row of serverRows) {
     const localTs = localMeta[row.key];
-    if (!localTs || row.updated_at >= localTs) {
+    if (!localTs || new Date(row.updated_at) >= new Date(localTs)) {
       updates[row.key] = row.value;
     }
   }
@@ -46,22 +46,38 @@ export function stampAndUpsert(key, value, user) {
     )
     .then(({ error }) => {
       if (error) console.warn("[sync] upsert failed:", key, error.message);
-    });
+    })
+    .catch((err) => console.warn("[sync] upsert error:", key, err.message));
 }
 
 // ── Pull on sign-in ───────────────────────────────────────────────────────────
 
 /**
  * Fetches all rows for the signed-in user and returns merged updates.
- * Returns null if Supabase is unavailable or the fetch fails.
+ * Also writes winning server timestamps into pj_meta_v1 so subsequent
+ * pulls use the correct baseline. Returns null on failure.
  */
-export async function pullUserData() {
-  if (!supabase) return null;
-  const { data, error } = await supabase.from(TABLE).select("key, value, updated_at");
+export async function pullUserData(user) {
+  if (!supabase || !user) return null;
+  const { data, error } = await supabase
+    .from(TABLE)
+    .select("key, value, updated_at")
+    .eq("user_id", user.id);
   if (error) {
     console.warn("[sync] pull failed:", error.message);
     return null;
   }
+  const rows = data ?? [];
   const localMeta = load(KEYS.meta, {});
-  return mergeServerLocal(data ?? [], localMeta);
+  const updates = mergeServerLocal(rows, localMeta);
+  if (Object.keys(updates).length > 0) {
+    const newMeta = { ...localMeta };
+    for (const row of rows) {
+      if (updates[row.key] !== undefined) {
+        newMeta[row.key] = new Date(row.updated_at).toISOString();
+      }
+    }
+    save(KEYS.meta, newMeta);
+  }
+  return updates;
 }
