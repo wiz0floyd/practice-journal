@@ -236,6 +236,7 @@ function Page({ children }) {
   );
 }
 
+<<<<<<< HEAD
 // ── Cloud sync ────────────────────────────────────────────────────────────────
 
 function useSync(user, setItems, setCards, setContext) {
@@ -250,6 +251,8 @@ function useSync(user, setItems, setCards, setContext) {
   }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
+=======
+>>>>>>> origin/main
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 function useAuth() {
