@@ -5,6 +5,7 @@ import {
   advanceBucket, encodeWAV, syncCards, KEYS, load, save,
 } from "./src/lib/sr.js";
 import { supabase } from "./src/lib/supabase.js";
+import { stampAndUpsert, pullUserData } from "./src/lib/sync.js";
 
 const longDate = () => new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
 
@@ -235,6 +236,23 @@ function Page({ children }) {
   );
 }
 
+<<<<<<< HEAD
+// ── Cloud sync ────────────────────────────────────────────────────────────────
+
+function useSync(user, setItems, setCards, setContext) {
+  useEffect(() => {
+    if (!user) return;
+    pullUserData().then((updates) => {
+      if (!updates) return;
+      if (updates[KEYS.items]   !== undefined) setItems(updates[KEYS.items]);
+      if (updates[KEYS.cards]   !== undefined) setCards(updates[KEYS.cards]);
+      if (updates[KEYS.context] !== undefined) setContext(updates[KEYS.context]);
+    });
+  }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+=======
+>>>>>>> origin/main
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 function useAuth() {
@@ -301,9 +319,16 @@ export default function App() {
   const [newDraft,  setNewDraft]  = useState(emptyDraft());
   const [showAdd,   setShowAdd]   = useState(false);
 
-  useEffect(() => { save(KEYS.items, items); }, [items]);
-  useEffect(() => { save(KEYS.cards,   cards);   }, [cards]);
-  useEffect(() => { save(KEYS.context, context); }, [context]);
+  // Keep a ref to the current user so save effects can read it without
+  // re-running on sign-in (which would push stale local data before the pull).
+  const userRef = useRef(user);
+  useEffect(() => { userRef.current = user; });
+
+  useSync(user, setItems, setCards, setContext);
+
+  useEffect(() => { save(KEYS.items,   items);   stampAndUpsert(KEYS.items,   items,   userRef.current); }, [items]);
+  useEffect(() => { save(KEYS.cards,   cards);   stampAndUpsert(KEYS.cards,   cards,   userRef.current); }, [cards]);
+  useEffect(() => { save(KEYS.context, context); stampAndUpsert(KEYS.context, context, userRef.current); }, [context]);
 
   const dueCards = cards.filter(isDue);
   const card     = queue[idx];

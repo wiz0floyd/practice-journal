@@ -87,6 +87,7 @@ export const KEYS = {
   items:   "pj_items_v1",
   cards:   "pj_cards_v1",
   context: "pj_context_v1",
+  meta:    "pj_meta_v1",
 };
 
 export const load = (key, fallback) => { try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : fallback; } catch { return fallback; } };
