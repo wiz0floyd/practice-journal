@@ -12,3 +12,6 @@ coverage
 
 # Logs
 *.log
+
+# graphify knowledge-graph output (derived; re-buildable via `graphify .`)
+graphify-out/
