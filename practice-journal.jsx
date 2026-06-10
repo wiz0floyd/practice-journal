@@ -4,6 +4,7 @@ import {
   isDue, formatDue, draftValid, emptyDraft, newId, shuffle,
   advanceBucket, bucketSessions, encodeWAV, syncCards, KEYS, load, save, getCriteria,
   itemTags, parseTags, isCardPinned, cardMatchesTag, sessionPool, buildQueue,
+  weeklyStats,
 } from "./src/lib/sr.js";
 import { supabase } from "./src/lib/supabase.js";
 import { stampAndUpsert, pullUserData } from "./src/lib/sync.js";
@@ -239,7 +240,7 @@ function Page({ children }) {
 
 // ── Cloud sync ────────────────────────────────────────────────────────────────
 
-function useSync(user, setItems, setCards, setContext, setSettings, items, serverDataRef) {
+function useSync(user, setItems, setCards, setContext, setSettings, setSessions, items, serverDataRef) {
   useEffect(() => {
     if (!user) return;
     pullUserData(user).then((updates) => {
@@ -261,6 +262,10 @@ function useSync(user, setItems, setCards, setContext, setSettings, items, serve
       if (updates[KEYS.settings] !== undefined) {
         serverDataRef.current[KEYS.settings] = updates[KEYS.settings];
         setSettings(updates[KEYS.settings]);
+      }
+      if (updates[KEYS.sessions] !== undefined) {
+        serverDataRef.current[KEYS.sessions] = updates[KEYS.sessions];
+        setSessions(updates[KEYS.sessions]);
       }
     });
   }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -320,6 +325,7 @@ export default function App() {
   const [cards,         setCards]         = useState(() => syncCards(load(KEYS.items, DEFAULT_EXCERPTS), load(KEYS.cards, [])));
   const [context,       setContext]       = useState(() => load(KEYS.context, ""));
   const [settings,      setSettings]      = useState(() => load(KEYS.settings, DEFAULT_SETTINGS));
+  const [sessions,      setSessions]      = useState(() => load(KEYS.sessions, []));
   const [view,          setView]          = useState("dash");
   const [queue,         setQueue]         = useState([]);
   const [idx,           setIdx]           = useState(0);
@@ -327,6 +333,7 @@ export default function App() {
   const [result,        setResult]        = useState(null);
   const [sessionLength, setSessionLength] = useState(4);
   const [tagFilter,     setTagFilter]     = useState(null);
+  const [sessionNote,   setSessionNote]   = useState("");
 
   // Repertoire edit state
   const [editingId, setEditingId] = useState(null);
@@ -346,7 +353,7 @@ export default function App() {
   // only after the first render's save effects have already run.
   const isMounted = useRef(false);
 
-  useSync(user, setItems, setCards, setContext, setSettings, items, serverDataRef);
+  useSync(user, setItems, setCards, setContext, setSettings, setSessions, items, serverDataRef);
 
   useEffect(() => {
     save(KEYS.items, items);
@@ -372,6 +379,12 @@ export default function App() {
     if (settings === serverDataRef.current[KEYS.settings]) { delete serverDataRef.current[KEYS.settings]; return; }
     stampAndUpsert(KEYS.settings, settings, userRef.current);
   }, [settings]);
+  useEffect(() => {
+    save(KEYS.sessions, sessions);
+    if (!isMounted.current) return;
+    if (sessions === serverDataRef.current[KEYS.sessions]) { delete serverDataRef.current[KEYS.sessions]; return; }
+    stampAndUpsert(KEYS.sessions, sessions, userRef.current);
+  }, [sessions]);
   useEffect(() => { isMounted.current = true; }, []);
 
   const criteria = getCriteria(settings);
@@ -409,7 +422,7 @@ export default function App() {
       setCards((prev) => prev.map((c) =>
         sessionIds.has(c.id) ? c : { ...c, sessionsUntilDue: Math.max(0, (c.sessionsUntilDue ?? 0) - 1) }
       ));
-      setView("dash");
+      setSessionNote(""); setView("sessionNote");
     } else {
       setIdx((i) => i + 1); setScores({}); setView("assess");
     }
@@ -462,6 +475,35 @@ export default function App() {
       <ContextLine value={context} onChange={setContext} />
 
       <Rule thick />
+      {sessions.length > 0 && (() => {
+        const stats = weeklyStats(sessions, cards, items);
+        return (
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "1.25rem", padding: "0.75rem 0", borderBottom: `1px solid ${C.rule}` }}>
+            {[
+              { value: stats.sessionsThisWeek, label: "this week" },
+              { value: stats.itemsThisWeek,    label: "items" },
+              { value: stats.streak,           label: "day streak" },
+              {
+                value: (
+                  <span>
+                    <span style={{ color: C.hot }}>{stats.buckets.hot}</span>
+                    {" · "}
+                    <span style={{ color: C.warm }}>{stats.buckets.warm}</span>
+                    {" · "}
+                    <span style={{ color: C.cold }}>{stats.buckets.cold}</span>
+                  </span>
+                ),
+                label: "buckets",
+              },
+            ].map(({ value, label }) => (
+              <div key={label} style={{ textAlign: "center" }}>
+                <div style={{ fontFamily: F.display, fontSize: "1.3rem", fontWeight: 700, color: C.ink }}>{value}</div>
+                <div style={{ fontFamily: F.stamp, fontSize: "0.52rem", textTransform: "uppercase", letterSpacing: "0.12em", color: C.inkFaint }}>{label}</div>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
       <SessionSlider value={sessionLength} onChange={setSessionLength} dueCount={dueCards.length} maxItems={items.length} />
 
       {(() => {
@@ -888,6 +930,36 @@ export default function App() {
         <button onClick={advance} style={{ width: "100%", fontFamily: F.display, fontSize: "1rem", padding: "0.75rem", background: C.action, color: C.paperLt, border: "none", borderRadius: "1px", cursor: "pointer" }}>
           {idx + 1 >= queue.length ? "Close session" : "Next item →"}
         </button>
+      </Page>
+    );
+  }
+
+  // ── Session note ──────────────────────────────────────────────────────────
+
+  if (view === "sessionNote") {
+    const closeSession = (note) => {
+      setSessions((p) => [...p, { date: new Date().toISOString(), note: note.trim(), itemIds: queue.map((q) => q.id) }]);
+      setView("dash");
+    };
+    return (
+      <Page>
+        <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.14em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "1rem" }}>Session complete</p>
+        <Rule thick />
+        <p style={{ fontStyle: "italic", fontSize: "1rem", color: C.inkMid, marginBottom: "0.75rem" }}>How did it go? Leave a note for your future self.</p>
+        <textarea
+          value={sessionNote}
+          onChange={(e) => setSessionNote(e.target.value)}
+          style={{ fontFamily: F.body, fontSize: "1rem", color: C.ink, background: "transparent", border: `1px solid ${C.rule}`, outline: "none", width: "100%", padding: "8px 10px", borderRadius: "1px", resize: "vertical", minHeight: "6rem" }}
+        />
+        <button
+          onClick={() => closeSession(sessionNote)}
+          style={{ width: "100%", marginTop: "1rem", fontFamily: F.display, fontSize: "1rem", padding: "0.75rem", background: C.action, color: C.paperLt, border: "none", borderRadius: "1px", cursor: "pointer" }}
+        >
+          Close session
+        </button>
+        <div style={{ textAlign: "center", marginTop: "0.75rem" }}>
+          <button onClick={() => closeSession("")} style={inkBtn({ color: C.ink })}>skip note</button>
+        </div>
       </Page>
     );
   }
