@@ -178,6 +178,7 @@ export const KEYS = {
   meta:     "pj_meta_v1",
   active:   "pj_active_session_v1",
   migrated: "pj_migrated_v1",
+  queue:    "pj_sync_queue_v1",
 };
 
 export const load = (key, fallback) => { try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : fallback; } catch { return fallback; } };

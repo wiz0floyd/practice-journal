@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mergeServerLocal, stampMeta, migrationPlan, mergeById, SYNC_KEYS, uploadAll, fetchAllRows } from "./sync.js";
+import { mergeServerLocal, stampMeta, migrationPlan, mergeById, SYNC_KEYS, uploadAll, fetchAllRows, enqueueWrite, pruneQueue, partitionQueue, flushQueue } from "./sync.js";
 
 describe("mergeServerLocal", () => {
   it("returns server value when no local timestamp exists", () => {
@@ -154,5 +154,120 @@ describe("uploadAll / fetchAllRows null-supabase guard", () => {
   it("fetchAllRows returns null when user is null (no-supabase guard path)", async () => {
     const result = await fetchAllRows(null);
     expect(result).toBeNull();
+  });
+});
+
+describe("enqueueWrite", () => {
+  it("appends a new entry to an empty queue", () => {
+    const entry = { key: "pj_items_v1", value: [], updated_at: "2026-06-01T10:00:00Z" };
+    const result = enqueueWrite([], entry);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(entry);
+  });
+
+  it("appends a new entry with a different key", () => {
+    const existing = { key: "pj_cards_v1", value: [], updated_at: "2026-06-01T09:00:00Z" };
+    const entry    = { key: "pj_items_v1", value: ["x"], updated_at: "2026-06-01T10:00:00Z" };
+    const result = enqueueWrite([existing], entry);
+    expect(result).toHaveLength(2);
+    expect(result[1]).toEqual(entry);
+  });
+
+  it("replaces an existing entry for the same key (latest wins)", () => {
+    const old   = { key: "pj_items_v1", value: ["old"], updated_at: "2026-06-01T09:00:00Z" };
+    const newer = { key: "pj_items_v1", value: ["new"], updated_at: "2026-06-01T10:00:00Z" };
+    const result = enqueueWrite([old], newer);
+    expect(result).toHaveLength(1);
+    expect(result[0].value).toEqual(["new"]);
+  });
+
+  it("handles undefined queue gracefully", () => {
+    const entry = { key: "pj_items_v1", value: [], updated_at: "2026-06-01T10:00:00Z" };
+    const result = enqueueWrite(undefined, entry);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(entry);
+  });
+});
+
+describe("pruneQueue", () => {
+  const now = new Date("2026-06-09T12:00:00Z");
+
+  it("keeps entries younger than 7 days", () => {
+    const entry = { key: "pj_items_v1", value: [], updated_at: "2026-06-06T12:00:00Z" }; // 3 days old
+    expect(pruneQueue([entry], now)).toHaveLength(1);
+  });
+
+  it("drops entries older than 7 days", () => {
+    const entry = { key: "pj_items_v1", value: [], updated_at: "2026-06-01T12:00:00Z" }; // 8 days old
+    expect(pruneQueue([entry], now)).toHaveLength(0);
+  });
+
+  it("drops entries at exactly 7 days old (boundary is exclusive)", () => {
+    const entry = { key: "pj_items_v1", value: [], updated_at: "2026-06-02T12:00:00Z" }; // exactly 7 days
+    expect(pruneQueue([entry], now)).toHaveLength(0);
+  });
+
+  it("uses the explicit now parameter", () => {
+    const entry = { key: "pj_items_v1", value: [], updated_at: "2026-06-08T12:00:00Z" }; // 1 day old
+    const customNow = new Date("2026-06-09T12:00:00Z");
+    expect(pruneQueue([entry], customNow)).toHaveLength(1);
+  });
+
+  it("handles undefined queue gracefully", () => {
+    expect(pruneQueue(undefined, now)).toEqual([]);
+  });
+});
+
+describe("partitionQueue", () => {
+  it("pushes all entries when there are no server rows", () => {
+    const queue = [{ key: "pj_items_v1", value: [], updated_at: "2026-06-09T10:00:00Z" }];
+    const { push, drop } = partitionQueue(queue, []);
+    expect(push).toHaveLength(1);
+    expect(drop).toHaveLength(0);
+  });
+
+  it("drops entries where the server timestamp is newer", () => {
+    const queue = [{ key: "pj_items_v1", value: [], updated_at: "2026-06-09T08:00:00Z" }];
+    const rows  = [{ key: "pj_items_v1", updated_at: "2026-06-09T10:00:00Z" }];
+    const { push, drop } = partitionQueue(queue, rows);
+    expect(push).toHaveLength(0);
+    expect(drop).toHaveLength(1);
+  });
+
+  it("pushes entries where the queue timestamp is newer than the server", () => {
+    const queue = [{ key: "pj_items_v1", value: [], updated_at: "2026-06-09T12:00:00Z" }];
+    const rows  = [{ key: "pj_items_v1", updated_at: "2026-06-09T10:00:00Z" }];
+    const { push, drop } = partitionQueue(queue, rows);
+    expect(push).toHaveLength(1);
+    expect(drop).toHaveLength(0);
+  });
+
+  it("pushes entries with equal timestamps (>= rule: queue wins on tie)", () => {
+    const ts    = "2026-06-09T10:00:00Z";
+    const queue = [{ key: "pj_items_v1", value: [], updated_at: ts }];
+    const rows  = [{ key: "pj_items_v1", updated_at: ts }];
+    const { push, drop } = partitionQueue(queue, rows);
+    expect(push).toHaveLength(1);
+    expect(drop).toHaveLength(0);
+  });
+
+  it("handles empty inputs gracefully", () => {
+    const { push, drop } = partitionQueue([], []);
+    expect(push).toHaveLength(0);
+    expect(drop).toHaveLength(0);
+  });
+
+  it("handles undefined inputs gracefully", () => {
+    const { push, drop } = partitionQueue(undefined, undefined);
+    expect(push).toHaveLength(0);
+    expect(drop).toHaveLength(0);
+  });
+});
+
+describe("flushQueue null-supabase guard", () => {
+  it("returns false when supabase is null (guard path)", async () => {
+    // supabase module exports null when unconfigured
+    const result = await flushQueue(null);
+    expect(result).toBe(false);
   });
 });

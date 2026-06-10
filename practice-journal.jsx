@@ -17,6 +17,7 @@ import { supabase } from "./src/lib/supabase.js";
 import {
   stampAndUpsert, pullUserData, fetchAllRows, uploadAll, applyRows,
   migrationPlan, mergeById, isMigrated, setMigrated, SYNC_KEYS,
+  flushQueue, onSyncStatus,
 } from "./src/lib/sync.js";
 
 const longDate = () => new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
@@ -876,6 +877,7 @@ function Page({ children, wide }) {
     <div style={{ minHeight: "100vh", background: C.paper, fontFamily: F.body, color: C.ink }}>
       <style>{`
         @keyframes recpulse { 0%,100%{opacity:1} 50%{opacity:0.2} }
+        @keyframes syncspin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         button { appearance: none; }
         audio  { accent-color: ${C.action}; }
@@ -1153,6 +1155,7 @@ export default function App() {
   const [tagFilter,     setTagFilter]     = useState(null);
   const [sessionNote,   setSessionNote]   = useState("");
   const [pendingResume, setPendingResume] = useState(() => load(KEYS.active, null));
+  const [syncStatus,    setSyncStatus]    = useState("idle");
 
   // Import file input ref
   const importRef = useRef(null);
@@ -1245,6 +1248,22 @@ export default function App() {
     stampAndUpsert(KEYS.badges, badges, userRef.current);
   }, [badges]);
   useEffect(() => { isMounted.current = true; }, []);
+
+  // ── Sync status listener ──────────────────────────────────────────────────
+
+  useEffect(() => {
+    onSyncStatus(setSyncStatus);
+    return () => onSyncStatus(null);
+  }, []);
+
+  // ── Offline queue flush (on sign-in and reconnect) ────────────────────────
+
+  useEffect(() => {
+    if (user) flushQueue(user);
+    const h = () => { if (userRef.current) flushQueue(userRef.current); };
+    window.addEventListener("online", h);
+    return () => window.removeEventListener("online", h);
+  }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Active session snapshot (device-local, not synced) ────────────────────
 
@@ -1361,7 +1380,17 @@ export default function App() {
         <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.16em", textTransform: "uppercase", color: C.inkFaint, margin: 0 }}>
           Practice Journal
         </p>
-        <AccountButton user={user} signIn={signIn} signOut={signOut} />
+        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+          {syncStatus === "syncing" && (
+            <span title="Syncing…" style={{ fontFamily: F.stamp, fontSize: "0.75rem", color: C.inkFaint, display: "inline-block", animation: "syncspin 1.2s linear infinite", lineHeight: 1 }}>↻</span>
+          )}
+          {syncStatus === "error" && (
+            <button onClick={() => user && flushQueue(user)} title="Sync failed — click to retry" style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+              <span style={{ fontFamily: F.stamp, fontSize: "0.75rem", color: C.warm, lineHeight: 1 }}>⚠</span>
+            </button>
+          )}
+          <AccountButton user={user} signIn={signIn} signOut={signOut} />
+        </div>
       </div>
       <h1 style={{ fontFamily: F.display, fontSize: "2rem", fontWeight: 700, color: C.ink, lineHeight: 1.1 }}>
         {longDate()}
