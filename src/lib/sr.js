@@ -118,6 +118,7 @@ export const KEYS = {
   context:  "pj_context_v1",
   settings: "pj_settings_v1",
   sessions: "pj_sessions_v1",
+  badges:   "pj_badges_v1",
   meta:     "pj_meta_v1",
 };
 
@@ -154,6 +155,40 @@ export const weeklyStats = (sessions, cards, items, now = new Date()) => {
     streak:           streakDays(sessions, now),
     buckets,
   };
+};
+
+export const BADGES = [
+  { id: "first_session", label: "First Session", desc: "Logged your first session" },
+  { id: "streak_7",      label: "Week Streak",   desc: "Practiced 7 days in a row" },
+  { id: "streak_30",     label: "Month Streak",  desc: "Practiced 30 days in a row" },
+  { id: "first_cold",    label: "Ice Cold",      desc: "An item reached Cold" },
+  { id: "all_warm",      label: "Warmed Up",     desc: "Every item Warm or better" },
+  { id: "sessions_100",  label: "Centurion",     desc: "Logged 100 sessions" },
+];
+
+export const computeBadges = (sessions, cards, now = new Date()) => {
+  const earned = [];
+  if (sessions.length >= 1)   earned.push("first_session");
+  const streak = streakDays(sessions, now);
+  if (streak >= 7)             earned.push("streak_7");
+  if (streak >= 30)            earned.push("streak_30");
+  if (cards.some((c) => c.bucket === "cold"))                        earned.push("first_cold");
+  if (cards.length > 0 && !cards.some((c) => c.bucket === "hot"))   earned.push("all_warm");
+  if (sessions.length >= 100)  earned.push("sessions_100");
+  return earned;
+};
+
+export const bucketTransitions = (history) => {
+  const seq = [];
+  for (const h of history ?? []) {
+    if (h.bucket && seq[seq.length - 1] !== h.bucket) seq.push(h.bucket);
+  }
+  return seq;
+};
+
+export const scoreColor = (ups, total) => {
+  const r = ups / (total || 4);
+  return r > 0.75 ? "pass" : r > 0.5 ? "warm" : "fail";
 };
 
 export const syncCards = (items, cards) => {

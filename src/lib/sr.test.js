@@ -4,6 +4,7 @@ import {
   syncCards, shuffle, encodeWAV, DEFAULT_SETTINGS, CRITERIA, getCriteria,
   parseTags, itemTags, isCardPinned, cardMatchesTag, sessionPool, buildQueue,
   dayKey, streakDays, weeklyStats,
+  computeBadges, bucketTransitions, scoreColor,
 } from './sr.js'
 
 describe('isDue', () => {
@@ -483,5 +484,178 @@ describe('weeklyStats', () => {
     const sessions = [{ date: new Date(2025, 5, 9).toISOString(), itemIds: [], note: '' }]
     const stats = weeklyStats(sessions, [], [], now)
     expect(stats.streak).toBe(1)
+  })
+})
+
+// ── computeBadges ─────────────────────────────────────────────────────────────
+
+describe('computeBadges', () => {
+  const mkSession = (d) => ({ date: d.toISOString(), itemIds: [], note: '' })
+  const mkCard    = (id, bucket) => ({ id, bucket, sessionsUntilDue: 0, history: [] })
+
+  it('returns empty for no sessions', () => {
+    expect(computeBadges([], [], new Date(2025, 5, 9))).toEqual([])
+  })
+
+  it('awards first_session after 1 session', () => {
+    const sessions = [mkSession(new Date(2025, 5, 9))]
+    const badges = computeBadges(sessions, [], new Date(2025, 5, 9))
+    expect(badges).toContain('first_session')
+  })
+
+  it('does NOT award streak_7 for 6 consecutive days', () => {
+    const now = new Date(2025, 5, 9)
+    const sessions = Array.from({ length: 6 }, (_, i) => mkSession(new Date(2025, 5, 9 - i)))
+    const badges = computeBadges(sessions, [], now)
+    expect(badges).not.toContain('streak_7')
+  })
+
+  it('awards streak_7 for 7 consecutive days', () => {
+    const now = new Date(2025, 5, 9)
+    const sessions = Array.from({ length: 7 }, (_, i) => mkSession(new Date(2025, 5, 9 - i)))
+    const badges = computeBadges(sessions, [], now)
+    expect(badges).toContain('streak_7')
+  })
+
+  it('awards streak_30 for 30 consecutive days', () => {
+    const now = new Date(2025, 5, 30)
+    const sessions = Array.from({ length: 30 }, (_, i) => mkSession(new Date(2025, 5, 30 - i)))
+    const badges = computeBadges(sessions, [], now)
+    expect(badges).toContain('streak_30')
+  })
+
+  it('does NOT award streak_30 for 29 consecutive days', () => {
+    const now = new Date(2025, 5, 30)
+    const sessions = Array.from({ length: 29 }, (_, i) => mkSession(new Date(2025, 5, 30 - i)))
+    const badges = computeBadges(sessions, [], now)
+    expect(badges).not.toContain('streak_30')
+  })
+
+  it('awards first_cold when any card is cold', () => {
+    const sessions = [mkSession(new Date(2025, 5, 9))]
+    const cards = [mkCard('a', 'hot'), mkCard('b', 'cold')]
+    const badges = computeBadges(sessions, cards, new Date(2025, 5, 9))
+    expect(badges).toContain('first_cold')
+  })
+
+  it('does NOT award first_cold with no cold cards', () => {
+    const sessions = [mkSession(new Date(2025, 5, 9))]
+    const cards = [mkCard('a', 'hot'), mkCard('b', 'warm')]
+    const badges = computeBadges(sessions, cards, new Date(2025, 5, 9))
+    expect(badges).not.toContain('first_cold')
+  })
+
+  it('awards all_warm when all cards are warm or cold (no hot)', () => {
+    const sessions = [mkSession(new Date(2025, 5, 9))]
+    const cards = [mkCard('a', 'warm'), mkCard('b', 'cold')]
+    const badges = computeBadges(sessions, cards, new Date(2025, 5, 9))
+    expect(badges).toContain('all_warm')
+  })
+
+  it('does NOT award all_warm when any card is hot', () => {
+    const sessions = [mkSession(new Date(2025, 5, 9))]
+    const cards = [mkCard('a', 'hot'), mkCard('b', 'warm')]
+    const badges = computeBadges(sessions, cards, new Date(2025, 5, 9))
+    expect(badges).not.toContain('all_warm')
+  })
+
+  it('does NOT award all_warm when cards is empty', () => {
+    const sessions = [mkSession(new Date(2025, 5, 9))]
+    const badges = computeBadges(sessions, [], new Date(2025, 5, 9))
+    expect(badges).not.toContain('all_warm')
+  })
+
+  it('awards sessions_100 at exactly 100 sessions', () => {
+    const now = new Date(2025, 5, 9)
+    const sessions = Array.from({ length: 100 }, () => mkSession(new Date(2025, 0, 1)))
+    const badges = computeBadges(sessions, [], now)
+    expect(badges).toContain('sessions_100')
+  })
+
+  it('does NOT award sessions_100 for 99 sessions', () => {
+    const now = new Date(2025, 5, 9)
+    const sessions = Array.from({ length: 99 }, () => mkSession(new Date(2025, 0, 1)))
+    const badges = computeBadges(sessions, [], now)
+    expect(badges).not.toContain('sessions_100')
+  })
+})
+
+// ── bucketTransitions ─────────────────────────────────────────────────────────
+
+describe('bucketTransitions', () => {
+  it('returns empty array for empty history', () => {
+    expect(bucketTransitions([])).toEqual([])
+  })
+
+  it('returns empty array for null/undefined history', () => {
+    expect(bucketTransitions(null)).toEqual([])
+    expect(bucketTransitions(undefined)).toEqual([])
+  })
+
+  it('skips history entries without a bucket field', () => {
+    const history = [{ date: '2025-01-01', ups: 4, scores: {} }]
+    expect(bucketTransitions(history)).toEqual([])
+  })
+
+  it('records first bucket seen', () => {
+    const history = [{ date: '2025-01-01', bucket: 'hot', ups: 4 }]
+    expect(bucketTransitions(history)).toEqual(['hot'])
+  })
+
+  it('deduplicates consecutive identical buckets', () => {
+    const history = [
+      { date: '2025-01-01', bucket: 'hot' },
+      { date: '2025-01-02', bucket: 'hot' },
+      { date: '2025-01-03', bucket: 'warm' },
+    ]
+    expect(bucketTransitions(history)).toEqual(['hot', 'warm'])
+  })
+
+  it('records all unique transitions', () => {
+    const history = [
+      { date: '2025-01-01', bucket: 'hot' },
+      { date: '2025-01-02', bucket: 'warm' },
+      { date: '2025-01-03', bucket: 'cold' },
+      { date: '2025-01-04', bucket: 'warm' },
+    ]
+    expect(bucketTransitions(history)).toEqual(['hot', 'warm', 'cold', 'warm'])
+  })
+})
+
+// ── scoreColor ────────────────────────────────────────────────────────────────
+
+describe('scoreColor', () => {
+  it('returns "pass" when ratio > 0.75 (e.g. 4/4)', () => {
+    expect(scoreColor(4, 4)).toBe('pass')
+  })
+
+  it('returns "pass" when ratio > 0.75 (e.g. 4/5 = 0.8)', () => {
+    expect(scoreColor(4, 5)).toBe('pass')
+  })
+
+  it('returns "warm" when ratio > 0.5 and <= 0.75 (e.g. 3/4 = 0.75)', () => {
+    // 3/4 = 0.75 is not > 0.75, so falls to warm check (0.75 > 0.5 → warm)
+    expect(scoreColor(3, 4)).toBe('warm')
+  })
+
+  it('returns "warm" when ratio > 0.5 (e.g. 2/3 ≈ 0.667)', () => {
+    expect(scoreColor(2, 3)).toBe('warm')
+  })
+
+  it('returns "fail" when ratio = 0.5 (e.g. 2/4)', () => {
+    // 0.5 is not > 0.5, so falls to fail
+    expect(scoreColor(2, 4)).toBe('fail')
+  })
+
+  it('returns "fail" when ratio < 0.5', () => {
+    expect(scoreColor(1, 4)).toBe('fail')
+    expect(scoreColor(0, 4)).toBe('fail')
+  })
+
+  it('uses total=4 as fallback when total is 0', () => {
+    // ups=4, total=0 → fallback 4 → 4/4 = 1.0 > 0.75 → pass
+    expect(scoreColor(4, 0)).toBe('pass')
+    // ups=1, total=0 → fallback 4 → 1/4 = 0.25 → fail
+    expect(scoreColor(1, 0)).toBe('fail')
   })
 })

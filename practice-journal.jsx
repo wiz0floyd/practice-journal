@@ -4,7 +4,7 @@ import {
   isDue, formatDue, draftValid, emptyDraft, newId, shuffle,
   advanceBucket, bucketSessions, encodeWAV, syncCards, KEYS, load, save, getCriteria,
   itemTags, parseTags, isCardPinned, cardMatchesTag, sessionPool, buildQueue,
-  weeklyStats,
+  weeklyStats, streakDays, BADGES, computeBadges, bucketTransitions, scoreColor,
 } from "./src/lib/sr.js";
 import { supabase } from "./src/lib/supabase.js";
 import { stampAndUpsert, pullUserData } from "./src/lib/sync.js";
@@ -240,7 +240,7 @@ function Page({ children }) {
 
 // ── Cloud sync ────────────────────────────────────────────────────────────────
 
-function useSync(user, setItems, setCards, setContext, setSettings, setSessions, items, serverDataRef) {
+function useSync(user, setItems, setCards, setContext, setSettings, setSessions, setBadges, items, serverDataRef) {
   useEffect(() => {
     if (!user) return;
     pullUserData(user).then((updates) => {
@@ -266,6 +266,10 @@ function useSync(user, setItems, setCards, setContext, setSettings, setSessions,
       if (updates[KEYS.sessions] !== undefined) {
         serverDataRef.current[KEYS.sessions] = updates[KEYS.sessions];
         setSessions(updates[KEYS.sessions]);
+      }
+      if (updates[KEYS.badges] !== undefined) {
+        serverDataRef.current[KEYS.badges] = updates[KEYS.badges];
+        setBadges(updates[KEYS.badges]);
       }
     });
   }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -326,6 +330,8 @@ export default function App() {
   const [context,       setContext]       = useState(() => load(KEYS.context, ""));
   const [settings,      setSettings]      = useState(() => load(KEYS.settings, DEFAULT_SETTINGS));
   const [sessions,      setSessions]      = useState(() => load(KEYS.sessions, []));
+  const [badges,        setBadges]        = useState(() => load(KEYS.badges, {}));
+  const [toast,         setToast]         = useState(null);
   const [view,          setView]          = useState("dash");
   const [queue,         setQueue]         = useState([]);
   const [idx,           setIdx]           = useState(0);
@@ -353,7 +359,7 @@ export default function App() {
   // only after the first render's save effects have already run.
   const isMounted = useRef(false);
 
-  useSync(user, setItems, setCards, setContext, setSettings, setSessions, items, serverDataRef);
+  useSync(user, setItems, setCards, setContext, setSettings, setSessions, setBadges, items, serverDataRef);
 
   useEffect(() => {
     save(KEYS.items, items);
@@ -385,7 +391,31 @@ export default function App() {
     if (sessions === serverDataRef.current[KEYS.sessions]) { delete serverDataRef.current[KEYS.sessions]; return; }
     stampAndUpsert(KEYS.sessions, sessions, userRef.current);
   }, [sessions]);
+  useEffect(() => {
+    save(KEYS.badges, badges);
+    if (!isMounted.current) return;
+    if (badges === serverDataRef.current[KEYS.badges]) { delete serverDataRef.current[KEYS.badges]; return; }
+    stampAndUpsert(KEYS.badges, badges, userRef.current);
+  }, [badges]);
   useEffect(() => { isMounted.current = true; }, []);
+
+  // Badge award effect
+  useEffect(() => {
+    const earned = computeBadges(sessions, cards);
+    const newIds = earned.filter((id) => !(id in badges));
+    if (newIds.length > 0) {
+      setBadges((p) => ({ ...p, ...Object.fromEntries(newIds.map((id) => [id, new Date().toISOString()])) })); // eslint-disable-line react-hooks/set-state-in-effect
+      setToast(BADGES.find((b) => b.id === newIds[0]).label);
+    }
+  }, [sessions, cards]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Toast auto-dismiss
+  useEffect(() => {
+    if (toast) {
+      const t = setTimeout(() => setToast(null), 4000);
+      return () => clearTimeout(t);
+    }
+  }, [toast]);
 
   const criteria = getCriteria(settings);
   const dueCards = sessionPool(cards, items, tagFilter);
@@ -410,7 +440,7 @@ export default function App() {
     const failed = criteria.filter((c) => scores[c.id] === false).map((c) => c.label);
     setCards((prev) => prev.map((c) => c.id !== card.id ? c : {
       ...c, bucket: nb, sessionsUntilDue: bucketSessions(nb, settings),
-      history: [...c.history, { date: new Date().toISOString(), scores: { ...scores }, ups }],
+      history: [...c.history, { date: new Date().toISOString(), scores: { ...scores }, ups, bucket: nb, total: criteria.length }],
     }));
     setResult({ item, oldBucket: card.bucket, newBucket: nb, ups, failed, total: criteria.length });
     setView("result");
@@ -586,6 +616,27 @@ export default function App() {
         );
       })}
 
+      {Object.keys(badges).length > 0 && (
+        <div style={{ marginTop: "1.25rem" }}>
+          <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.4rem" }}>Badges</p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+            {Object.entries(badges).map(([id, earnedDate]) => {
+              const badge = BADGES.find((b) => b.id === id);
+              if (!badge) return null;
+              return (
+                <span
+                  key={id}
+                  title={`${badge.desc} · ${new Date(earnedDate).toLocaleDateString()}`}
+                  style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.action, border: `1px solid ${C.action}`, padding: "1px 5px", borderRadius: "1px", display: "inline-block", lineHeight: 1.6 }}
+                >
+                  {badge.label}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div style={{ marginTop: "1.5rem", display: "flex", justifyContent: "center", gap: "1.75rem" }}>
         <button onClick={() => { if (window.confirm("Reset all cards to Hot?")) setCards(syncCards(items, [])); }} style={inkBtn({ color: C.inkFaint })}>
           Reset all cards
@@ -593,7 +644,17 @@ export default function App() {
         <button onClick={() => setView("settings")} style={inkBtn({ color: C.inkFaint })}>
           Settings
         </button>
+        <button onClick={() => setView("history")} style={inkBtn({ color: C.inkFaint })}>
+          History
+        </button>
       </div>
+
+      {toast && (
+        <div style={{ position: "fixed", bottom: "1.5rem", left: "50%", transform: "translateX(-50%)", background: C.paperLt, border: `1.5px solid ${C.action}`, borderRadius: "2px", padding: "0.6rem 1.1rem", boxShadow: "0 2px 12px rgba(28,18,9,0.18)", zIndex: 10 }}>
+          <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.2rem" }}>Badge earned</p>
+          <p style={{ fontFamily: F.display, fontSize: "1.05rem", fontWeight: 700, color: C.action }}>{toast}</p>
+        </div>
+      )}
     </Page>
   );
 
@@ -702,6 +763,92 @@ export default function App() {
           Restore default rubric
         </button>
       </div>
+    </Page>
+  );
+
+  // ── History ───────────────────────────────────────────────────────────────
+
+  if (view === "history") return (
+    <Page>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "1.25rem" }}>
+        <button onClick={() => setView("dash")} style={{ background: "none", border: "none", cursor: "pointer", fontFamily: F.body, fontStyle: "italic", fontSize: "0.95rem", color: C.inkFaint, padding: 0 }}>← Journal</button>
+        <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.14em", textTransform: "uppercase", color: C.inkFaint }}>History</p>
+      </div>
+
+      <Rule thick />
+
+      <p style={{ fontFamily: F.display, fontSize: "1.3rem", fontWeight: 700, color: C.ink, marginBottom: "0.15rem" }}>
+        {sessions.length} sessions logged
+      </p>
+      <p style={{ fontFamily: F.stamp, fontSize: "0.58rem", letterSpacing: "0.1em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "1.25rem" }}>
+        {streakDays(sessions)} day streak
+      </p>
+
+      {items.map((it) => {
+        const c = cards.find((x) => x.id === it.id);
+        if (!c) return null;
+        const last10 = (c.history ?? []).slice(-10);
+        const transitions = bucketTransitions(c.history);
+        return (
+          <div key={it.id}>
+            <div style={{ padding: "0.75rem 0" }}>
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem", marginBottom: "0.4rem" }}>
+                <p style={{ fontSize: "1rem", lineHeight: 1.3, color: C.ink }}>
+                  <span style={{ fontWeight: 600 }}>{it.composer}</span>
+                  <span style={{ color: C.inkFaint }}> · </span>
+                  <span style={{ fontStyle: "italic" }}>{it.title}</span>
+                </p>
+                <div style={{ flexShrink: 0, marginTop: "0.1rem" }}><Badge bucket={c.bucket} /></div>
+              </div>
+              <div style={{ marginBottom: "0.3rem" }}>
+                {last10.length > 0 ? (
+                  last10.map((h, i) => {
+                    const col = scoreColor(h.ups, h.total);
+                    const bg  = col === "pass" ? C.pass : col === "warm" ? C.warm : C.fail;
+                    return (
+                      <span
+                        key={i}
+                        title={`${new Date(h.date).toLocaleDateString()} · ${h.ups}/${h.total ?? 4}`}
+                        style={{ display: "inline-block", width: 10, height: 10, borderRadius: 1, marginRight: 3, background: bg }}
+                      />
+                    );
+                  })
+                ) : (
+                  <span style={{ fontStyle: "italic", fontSize: "0.9rem", color: C.inkFaint }}>no assessments yet</span>
+                )}
+              </div>
+              <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.08em", color: C.inkFaint }}>
+                {(c.history ?? []).length} assessments
+                {transitions.length > 1 && (
+                  <span> · {transitions.map((b) => BUCKET[b].label).join(" → ")}</span>
+                )}
+              </p>
+            </div>
+            <div style={{ borderTop: `1px solid ${C.rule}` }} />
+          </div>
+        );
+      })}
+
+      {(() => {
+        const notedSessions = [...sessions].reverse().filter((s) => s.note && s.note.trim()).slice(0, 5);
+        if (!notedSessions.length) return null;
+        return (
+          <div style={{ marginTop: "1.25rem" }}>
+            <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.15em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.5rem" }}>Recent notes</p>
+            {notedSessions.map((s, i) => (
+              <div key={s.date}>
+                <div style={{ padding: "0.6rem 0" }}>
+                  <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.08em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.2rem" }}>
+                    {new Date(s.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                  </p>
+                  <p style={{ fontStyle: "italic", fontFamily: F.body, fontSize: "1rem", color: C.inkMid, whiteSpace: "pre-wrap" }}>{s.note}</p>
+                </div>
+                {i < notedSessions.length - 1 && <div style={{ borderTop: `1px solid ${C.rule}` }} />}
+              </div>
+            ))}
+          </div>
+        );
+      })()}
     </Page>
   );
 
