@@ -3,6 +3,7 @@ import {
   BUCKET, CRITERIA, DEFAULT_EXCERPTS, DEFAULT_SETTINGS,
   isDue, formatDue, draftValid, emptyDraft, newId, shuffle,
   advanceBucket, bucketSessions, encodeWAV, syncCards, KEYS, load, save, getCriteria,
+  itemTags, parseTags, isCardPinned, cardMatchesTag, sessionPool, buildQueue,
 } from "./src/lib/sr.js";
 import { supabase } from "./src/lib/supabase.js";
 import { stampAndUpsert, pullUserData } from "./src/lib/sync.js";
@@ -325,6 +326,7 @@ export default function App() {
   const [scores,        setScores]        = useState({});
   const [result,        setResult]        = useState(null);
   const [sessionLength, setSessionLength] = useState(4);
+  const [tagFilter,     setTagFilter]     = useState(null);
 
   // Repertoire edit state
   const [editingId, setEditingId] = useState(null);
@@ -373,14 +375,14 @@ export default function App() {
   useEffect(() => { isMounted.current = true; }, []);
 
   const criteria = getCriteria(settings);
-  const dueCards = cards.filter(isDue);
+  const dueCards = sessionPool(cards, items, tagFilter);
   const card     = queue[idx];
   const item     = card ? items.find((e) => e.id === card.id) : null;
 
   // ── Session ───────────────────────────────────────────────────────────────
 
   const startSession = () => {
-    setQueue(shuffle(dueCards).slice(0, sessionLength));
+    setQueue(buildQueue(cards, items, tagFilter, sessionLength));
     setIdx(0); setScores({}); setResult(null);
     setView("assess");
   };
@@ -415,11 +417,18 @@ export default function App() {
 
   // ── Repertoire ────────────────────────────────────────────────────────────
 
-  const startEdit  = (it) => { setEditingId(it.id); setEditDraft({ composer: it.composer, title: it.title, detail: it.detail }); };
+  const startEdit  = (it) => { setEditingId(it.id); setEditDraft({ composer: it.composer, title: it.title, detail: it.detail, notes: it.notes ?? "", tags: itemTags(it).join(", ") }); };
   const cancelEdit = ()   => { setEditingId(null); setEditDraft(emptyDraft()); };
 
   const saveEdit = () => {
-    setItems((prev) => prev.map((e) => e.id !== editingId ? e : { ...e, ...editDraft }));
+    setItems((prev) => prev.map((e) => e.id !== editingId ? e : {
+      ...e,
+      composer: editDraft.composer,
+      title:    editDraft.title,
+      detail:   editDraft.detail,
+      notes:    editDraft.notes.trim(),
+      tags:     parseTags(editDraft.tags),
+    }));
     cancelEdit();
   };
 
@@ -432,7 +441,7 @@ export default function App() {
   const addItem = () => {
     if (!draftValid(newDraft)) return;
     const id = newId();
-    setItems((prev) => [...prev, { id, composer: newDraft.composer.trim(), title: newDraft.title.trim(), detail: newDraft.detail.trim() }]);
+    setItems((prev) => [...prev, { id, composer: newDraft.composer.trim(), title: newDraft.title.trim(), detail: newDraft.detail.trim(), notes: newDraft.notes.trim(), tags: parseTags(newDraft.tags) }]);
     setCards((prev) => [...prev, { id, bucket: "hot", sessionsUntilDue: 0, history: [] }]);
     setNewDraft(emptyDraft()); setShowAdd(false);
   };
@@ -455,11 +464,41 @@ export default function App() {
       <Rule thick />
       <SessionSlider value={sessionLength} onChange={setSessionLength} dueCount={dueCards.length} maxItems={items.length} />
 
-      {dueCards.length > 0 ? (
-        <button onClick={startSession} style={{ width: "100%", marginBottom: "1.75rem", fontFamily: F.display, fontSize: "1.05rem", padding: "0.8rem 1rem", background: C.action, color: C.paperLt, border: "none", borderRadius: "1px", cursor: "pointer" }}>
-          Begin session — {Math.min(sessionLength, dueCards.length)} {Math.min(sessionLength, dueCards.length) === 1 ? "item" : "items"}
-        </button>
-      ) : (
+      {(() => {
+        const allTags = [...new Set(items.flatMap((it) => itemTags(it)))].sort();
+        return allTags.length > 0 ? (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginBottom: "1rem" }}>
+            {allTags.map((tag) => {
+              const active = tagFilter === tag;
+              return (
+                <button
+                  key={tag}
+                  onClick={() => setTagFilter(active ? null : tag)}
+                  style={{
+                    fontFamily: F.stamp, fontSize: "0.58rem", textTransform: "uppercase",
+                    letterSpacing: "0.1em", padding: "2px 8px", borderRadius: "1px",
+                    cursor: "pointer", border: `1px solid ${active ? C.action : C.ruleDk}`,
+                    background: active ? C.action : "transparent",
+                    color: active ? C.paperLt : C.inkMid,
+                  }}
+                >
+                  {tag}
+                </button>
+              );
+            })}
+          </div>
+        ) : null;
+      })()}
+
+      {dueCards.length > 0 ? (() => {
+        const pinnedDueCount = dueCards.filter((c) => isCardPinned(c, items)).length;
+        const sessionCount   = Math.min(dueCards.length, Math.max(Math.min(sessionLength, dueCards.length), pinnedDueCount));
+        return (
+          <button onClick={startSession} style={{ width: "100%", marginBottom: "1.75rem", fontFamily: F.display, fontSize: "1.05rem", padding: "0.8rem 1rem", background: C.action, color: C.paperLt, border: "none", borderRadius: "1px", cursor: "pointer" }}>
+            Begin session — {sessionCount} {sessionCount === 1 ? "item" : "items"}
+          </button>
+        );
+      })() : (
         <div style={{ marginBottom: "1.75rem", padding: "0.75rem", border: `1px solid ${C.rule}`, textAlign: "center", fontStyle: "italic", color: C.inkFaint, fontSize: "1rem" }}>
           Nothing due — complete a session to advance the queue
         </div>
@@ -470,13 +509,14 @@ export default function App() {
         <button onClick={() => { setEditingId(null); setShowAdd(false); setView("repertoire"); }} style={inkBtn({ color: C.inkFaint })}>Edit →</button>
       </div>
 
-      {cards.map((c) => {
-        const it  = items.find((e) => e.id === c.id);
+      {cards.filter((c) => !tagFilter || cardMatchesTag(c, items, tagFilter)).map((c) => {
+        const it     = items.find((e) => e.id === c.id);
         if (!it) return null;
-        const due = isDue(c);
+        const due    = isDue(c);
+        const pinned = isCardPinned(c, items);
         return (
           <div key={c.id}>
-            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem", padding: "0.65rem 0", opacity: due ? 1 : 0.5 }}>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem", padding: "0.65rem 0", opacity: due || pinned ? 1 : 0.5 }}>
               <div style={{ minWidth: 0 }}>
                 <p style={{ fontSize: "1rem", lineHeight: 1.3, color: C.ink }}>
                   <span style={{ fontWeight: 600 }}>{it.composer}</span>
@@ -486,9 +526,16 @@ export default function App() {
                 {it.detail && <p style={{ fontSize: "0.85rem", color: C.inkFaint, marginTop: "0.1rem", fontStyle: "italic" }}>{it.detail}</p>}
               </div>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "0.3rem", flexShrink: 0 }}>
-                <Badge bucket={c.bucket} />
+                <div style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  <Badge bucket={c.bucket} />
+                  {pinned && (
+                    <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.action, border: `1px solid ${C.action}`, padding: "1px 5px", borderRadius: "1px", display: "inline-block", lineHeight: 1.6 }}>
+                      Pinned
+                    </span>
+                  )}
+                </div>
                 <span style={{ fontFamily: F.stamp, fontSize: "0.58rem", color: due ? C.warm : C.inkFaint, letterSpacing: "0.04em" }}>
-                  {formatDue(c.sessionsUntilDue ?? 0)}
+                  {pinned && !due ? "pinned" : formatDue(c.sessionsUntilDue ?? 0)}
                 </span>
               </div>
             </div>
@@ -648,6 +695,19 @@ export default function App() {
                   <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.2rem" }}>Detail</p>
                   <JournalInput value={editDraft.detail} onChange={(v) => setEditDraft((d) => ({ ...d, detail: v }))} placeholder="Mvt., measures, etc." />
                 </div>
+                <div style={{ marginBottom: "0.75rem" }}>
+                  <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.2rem" }}>Notes</p>
+                  <textarea
+                    value={editDraft.notes}
+                    onChange={(e) => setEditDraft((d) => ({ ...d, notes: e.target.value }))}
+                    placeholder="Practice notes, tips, context…"
+                    style={{ fontFamily: F.body, fontSize: "0.95rem", color: C.ink, background: "transparent", border: `1px solid ${C.rule}`, outline: "none", width: "100%", padding: "6px 8px", borderRadius: "1px", resize: "vertical", minHeight: "3.5rem" }}
+                  />
+                </div>
+                <div style={{ marginBottom: "0.75rem" }}>
+                  <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.2rem" }}>Tags</p>
+                  <JournalInput value={editDraft.tags} onChange={(v) => setEditDraft((d) => ({ ...d, tags: v }))} placeholder="audition, etudes, … (comma-separated)" />
+                </div>
                 <div style={{ display: "flex", gap: "1rem" }}>
                   <button onClick={saveEdit} disabled={!draftValid(editDraft)} style={inkBtn({ color: draftValid(editDraft) ? C.action : C.inkFaint })}>Save</button>
                   <button onClick={cancelEdit} style={inkBtn({ color: C.inkFaint })}>Cancel</button>
@@ -662,9 +722,20 @@ export default function App() {
                     <span style={{ fontStyle: "italic" }}>{it.title}</span>
                   </p>
                   {it.detail && <p style={{ fontSize: "0.85rem", color: C.inkFaint, marginTop: "0.1rem", fontStyle: "italic" }}>{it.detail}</p>}
+                  {itemTags(it).length > 0 && (
+                    <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", color: C.inkFaint, letterSpacing: "0.08em", marginTop: "0.15rem" }}>
+                      {itemTags(it).join(" · ")}
+                    </p>
+                  )}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexShrink: 0, paddingTop: "0.2rem" }}>
                   {card && <Badge bucket={card.bucket} />}
+                  <button
+                    onClick={() => setItems((prev) => prev.map((e) => e.id !== it.id ? e : { ...e, pinned: !e.pinned }))}
+                    style={inkBtn({ color: it.pinned ? C.action : C.inkFaint })}
+                  >
+                    {it.pinned ? "pinned" : "pin"}
+                  </button>
                   <button onClick={() => startEdit(it)} style={inkBtn({ color: C.inkFaint })}>edit</button>
                   <button onClick={() => deleteItem(it.id)} style={inkBtn({ color: C.fail, letterSpacing: 0, fontSize: "0.85rem" })}>×</button>
                 </div>
@@ -697,6 +768,19 @@ export default function App() {
               <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.2rem" }}>Detail</p>
               <JournalInput value={newDraft.detail} onChange={(v) => setNewDraft((d) => ({ ...d, detail: v }))} placeholder="Mvt., measures, etc." />
             </div>
+            <div style={{ marginBottom: "0.75rem" }}>
+              <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.2rem" }}>Notes</p>
+              <textarea
+                value={newDraft.notes}
+                onChange={(e) => setNewDraft((d) => ({ ...d, notes: e.target.value }))}
+                placeholder="Practice notes, tips, context…"
+                style={{ fontFamily: F.body, fontSize: "0.95rem", color: C.ink, background: "transparent", border: `1px solid ${C.rule}`, outline: "none", width: "100%", padding: "6px 8px", borderRadius: "1px", resize: "vertical", minHeight: "3.5rem" }}
+              />
+            </div>
+            <div style={{ marginBottom: "0.75rem" }}>
+              <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.2rem" }}>Tags</p>
+              <JournalInput value={newDraft.tags} onChange={(v) => setNewDraft((d) => ({ ...d, tags: v }))} placeholder="audition, etudes, … (comma-separated)" />
+            </div>
             <div style={{ display: "flex", gap: "1rem" }}>
               <button onClick={addItem} disabled={!draftValid(newDraft)} style={inkBtn({ color: draftValid(newDraft) ? C.action : C.inkFaint })}>Add to repertoire</button>
               <button onClick={() => { setShowAdd(false); setNewDraft(emptyDraft()); }} style={inkBtn({ color: C.inkFaint })}>Cancel</button>
@@ -728,6 +812,13 @@ export default function App() {
         </div>
         <div style={{ marginTop: "0.2rem", flexShrink: 0, marginLeft: "0.75rem" }}><Badge bucket={card.bucket} /></div>
       </div>
+
+      {item.notes && (
+        <div style={{ marginTop: "0.6rem", paddingLeft: "0.75rem", borderLeft: `2px solid ${C.rule}` }}>
+          <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.2rem" }}>Notes</p>
+          <p style={{ fontStyle: "italic", fontFamily: F.body, fontSize: "0.95rem", color: C.inkMid, whiteSpace: "pre-wrap" }}>{item.notes}</p>
+        </div>
+      )}
 
       <Rule thick />
       <p style={{ fontStyle: "italic", fontSize: "0.95rem", color: C.inkMid, marginBottom: "1rem" }}>Play through cold, then mark each criterion:</p>
