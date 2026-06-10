@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  BUCKET, CRITERIA, DEFAULT_EXCERPTS,
+  BUCKET, CRITERIA, DEFAULT_EXCERPTS, DEFAULT_SETTINGS,
   isDue, formatDue, draftValid, emptyDraft, newId, shuffle,
-  advanceBucket, encodeWAV, syncCards, KEYS, load, save,
+  advanceBucket, bucketSessions, encodeWAV, syncCards, KEYS, load, save,
 } from "./src/lib/sr.js";
 import { supabase } from "./src/lib/supabase.js";
 import { stampAndUpsert, pullUserData } from "./src/lib/sync.js";
@@ -238,7 +238,7 @@ function Page({ children }) {
 
 // ── Cloud sync ────────────────────────────────────────────────────────────────
 
-function useSync(user, setItems, setCards, setContext, items, serverDataRef) {
+function useSync(user, setItems, setCards, setContext, setSettings, items, serverDataRef) {
   useEffect(() => {
     if (!user) return;
     pullUserData(user).then((updates) => {
@@ -256,6 +256,10 @@ function useSync(user, setItems, setCards, setContext, items, serverDataRef) {
       if (updates[KEYS.context] !== undefined) {
         serverDataRef.current[KEYS.context] = updates[KEYS.context];
         setContext(updates[KEYS.context]);
+      }
+      if (updates[KEYS.settings] !== undefined) {
+        serverDataRef.current[KEYS.settings] = updates[KEYS.settings];
+        setSettings(updates[KEYS.settings]);
       }
     });
   }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -314,6 +318,7 @@ export default function App() {
   const [items,         setItems]         = useState(() => load(KEYS.items,   DEFAULT_EXCERPTS));
   const [cards,         setCards]         = useState(() => syncCards(load(KEYS.items, DEFAULT_EXCERPTS), load(KEYS.cards, [])));
   const [context,       setContext]       = useState(() => load(KEYS.context, ""));
+  const [settings,      setSettings]      = useState(() => load(KEYS.settings, DEFAULT_SETTINGS));
   const [view,          setView]          = useState("dash");
   const [queue,         setQueue]         = useState([]);
   const [idx,           setIdx]           = useState(0);
@@ -339,7 +344,7 @@ export default function App() {
   // only after the first render's save effects have already run.
   const isMounted = useRef(false);
 
-  useSync(user, setItems, setCards, setContext, items, serverDataRef);
+  useSync(user, setItems, setCards, setContext, setSettings, items, serverDataRef);
 
   useEffect(() => {
     save(KEYS.items, items);
@@ -359,6 +364,12 @@ export default function App() {
     if (context === serverDataRef.current[KEYS.context]) { delete serverDataRef.current[KEYS.context]; return; }
     stampAndUpsert(KEYS.context, context, userRef.current);
   }, [context]);
+  useEffect(() => {
+    save(KEYS.settings, settings);
+    if (!isMounted.current) return;
+    if (settings === serverDataRef.current[KEYS.settings]) { delete serverDataRef.current[KEYS.settings]; return; }
+    stampAndUpsert(KEYS.settings, settings, userRef.current);
+  }, [settings]);
   useEffect(() => { isMounted.current = true; }, []);
 
   const dueCards = cards.filter(isDue);
@@ -382,7 +393,7 @@ export default function App() {
     const nb     = advanceBucket(card.bucket, ups);
     const failed = CRITERIA.filter((c) => scores[c.id] === false).map((c) => c.label);
     setCards((prev) => prev.map((c) => c.id !== card.id ? c : {
-      ...c, bucket: nb, sessionsUntilDue: BUCKET[nb].sessions,
+      ...c, bucket: nb, sessionsUntilDue: bucketSessions(nb, settings),
       history: [...c.history, { date: new Date().toISOString(), scores: { ...scores }, ups }],
     }));
     setResult({ item, oldBucket: card.bucket, newBucket: nb, ups, failed });
@@ -485,9 +496,61 @@ export default function App() {
         );
       })}
 
-      <div style={{ marginTop: "1.5rem", textAlign: "center" }}>
+      <div style={{ marginTop: "1.5rem", display: "flex", justifyContent: "center", gap: "1.75rem" }}>
         <button onClick={() => { if (window.confirm("Reset all cards to Hot?")) setCards(syncCards(items, [])); }} style={inkBtn({ color: C.inkFaint })}>
           Reset all cards
+        </button>
+        <button onClick={() => setView("settings")} style={inkBtn({ color: C.inkFaint })}>
+          Settings
+        </button>
+      </div>
+    </Page>
+  );
+
+  // ── Settings ──────────────────────────────────────────────────────────────
+
+  if (view === "settings") return (
+    <Page>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "1.25rem" }}>
+        <button onClick={() => setView("dash")} style={{ background: "none", border: "none", cursor: "pointer", fontFamily: F.body, fontStyle: "italic", fontSize: "0.95rem", color: C.inkFaint, padding: 0 }}>← Journal</button>
+        <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.14em", textTransform: "uppercase", color: C.inkFaint }}>Settings</p>
+      </div>
+
+      <Rule thick />
+
+      <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.15em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.3rem" }}>Review intervals</p>
+      <p style={{ fontStyle: "italic", fontSize: "0.95rem", color: C.inkMid, marginBottom: "0.75rem" }}>How many sessions pass before an item comes due again.</p>
+
+      {Object.keys(BUCKET).map((b, i) => (
+        <div key={b}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.65rem 0" }}>
+            <Badge bucket={b} />
+            <div style={{ display: "flex", alignItems: "baseline", gap: "0.5rem" }}>
+              <input
+                type="number" min={1} max={9}
+                value={bucketSessions(b, settings)}
+                onChange={(e) => {
+                  const v = Math.max(1, Math.min(9, parseInt(e.target.value, 10) || 1));
+                  setSettings((s) => ({ ...s, intervals: { ...(s.intervals ?? {}), [b]: v } }));
+                }}
+                style={{ fontFamily: F.display, fontSize: "1.1rem", color: C.ink, background: "transparent", border: "none", borderBottom: `1px solid ${C.rule}`, outline: "none", width: "3rem", textAlign: "center", padding: "2px 0" }}
+              />
+              <span style={{ fontFamily: F.stamp, fontSize: "0.58rem", color: C.inkFaint, letterSpacing: "0.05em" }}>
+                {bucketSessions(b, settings) === 1 ? "every session" : `every ${bucketSessions(b, settings)} sessions`}
+              </span>
+            </div>
+          </div>
+          {i < Object.keys(BUCKET).length - 1 && <div style={{ borderTop: `1px solid ${C.rule}` }} />}
+        </div>
+      ))}
+
+      <Rule />
+      <div style={{ textAlign: "center", marginTop: "1rem" }}>
+        <button
+          onClick={() => setSettings((s) => ({ ...s, intervals: { ...DEFAULT_SETTINGS.intervals } }))}
+          style={inkBtn({ color: C.inkFaint })}
+        >
+          Restore default intervals
         </button>
       </div>
     </Page>
@@ -654,7 +717,7 @@ export default function App() {
               {promoted ? "promoted" : demoted ? "demoted" : "unchanged"}
             </span>
           </div>
-          <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, letterSpacing: "0.05em" }}>{ups}/4 · {formatDue(BUCKET[newBucket].sessions)}</p>
+          <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, letterSpacing: "0.05em" }}>{ups}/4 · {formatDue(bucketSessions(newBucket, settings))}</p>
         </div>
         <Rule />
         <div style={{ marginBottom: "1.5rem" }}>

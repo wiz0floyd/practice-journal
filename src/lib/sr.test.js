@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
-  isDue, formatDue, draftValid, advanceBucket,
-  syncCards, shuffle, encodeWAV,
+  isDue, formatDue, draftValid, advanceBucket, bucketSessions,
+  syncCards, shuffle, encodeWAV, DEFAULT_SETTINGS,
 } from './sr.js'
 
 describe('isDue', () => {
@@ -81,6 +81,31 @@ describe('advanceBucket', () => {
   it('demotes cold → warm on ≤2', () => {
     expect(advanceBucket('cold', 2)).toBe('warm')
     expect(advanceBucket('cold', 0)).toBe('warm')
+  })
+})
+
+describe('bucketSessions', () => {
+  it('returns built-in defaults when settings are missing', () => {
+    expect(bucketSessions('hot', undefined)).toBe(1)
+    expect(bucketSessions('warm', null)).toBe(2)
+    expect(bucketSessions('cold', {})).toBe(3)
+  })
+  it('returns defaults from DEFAULT_SETTINGS', () => {
+    expect(bucketSessions('hot', DEFAULT_SETTINGS)).toBe(1)
+    expect(bucketSessions('warm', DEFAULT_SETTINGS)).toBe(2)
+    expect(bucketSessions('cold', DEFAULT_SETTINGS)).toBe(3)
+  })
+  it('honors user overrides', () => {
+    const s = { intervals: { hot: 2, warm: 4, cold: 7 } }
+    expect(bucketSessions('hot', s)).toBe(2)
+    expect(bucketSessions('warm', s)).toBe(4)
+    expect(bucketSessions('cold', s)).toBe(7)
+  })
+  it('clamps to 1–9 and falls back on invalid values', () => {
+    expect(bucketSessions('hot', { intervals: { hot: 99 } })).toBe(9)
+    expect(bucketSessions('hot', { intervals: { hot: 0 } })).toBe(1)
+    expect(bucketSessions('hot', { intervals: { hot: -3 } })).toBe(1)
+    expect(bucketSessions('warm', { intervals: { warm: 'abc' } })).toBe(2)
   })
 })
 

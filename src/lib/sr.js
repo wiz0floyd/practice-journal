@@ -20,6 +20,16 @@ export const BUCKET = {
   cold: { label: "Cold", sessions: 3, up: null,   dn: "warm" },
 };
 
+export const DEFAULT_SETTINGS = {
+  intervals: { hot: 1, warm: 2, cold: 3 },
+};
+
+/** Sessions between reviews for a bucket, honoring user settings (clamped 1–9). */
+export const bucketSessions = (bucket, settings) => {
+  const n = Number(settings?.intervals?.[bucket]);
+  return Number.isFinite(n) && n >= 1 ? Math.min(Math.round(n), 9) : BUCKET[bucket].sessions;
+};
+
 export const CRITERIA = [
   { id: "intonation", label: "Intonation" },
   { id: "rhythm",     label: "Rhythm"     },
@@ -84,10 +94,11 @@ export function encodeWAV(Lchunks, Rchunks, sr) {
 // ── Storage ───────────────────────────────────────────────────────────────────
 
 export const KEYS = {
-  items:   "pj_items_v1",
-  cards:   "pj_cards_v1",
-  context: "pj_context_v1",
-  meta:    "pj_meta_v1",
+  items:    "pj_items_v1",
+  cards:    "pj_cards_v1",
+  context:  "pj_context_v1",
+  settings: "pj_settings_v1",
+  meta:     "pj_meta_v1",
 };
 
 export const load = (key, fallback) => { try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : fallback; } catch { return fallback; } };
