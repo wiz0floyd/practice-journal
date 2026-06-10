@@ -21,8 +21,9 @@ export const BUCKET = {
 };
 
 export const DEFAULT_SETTINGS = {
-  intervals: { hot: 1, warm: 2, cold: 3 },
-  pomodoro:  { work: 25, break: 5 },
+  intervals:      { hot: 1, warm: 2, cold: 3 },
+  pomodoro:       { work: 25, break: 5 },
+  recordingLimit: 5,
 };
 
 /** Sessions between reviews for a bucket, honoring user settings (clamped 1–9). */
@@ -142,36 +143,21 @@ export function autoCorrelate(buf, sampleRate) {
   return sampleRate / T0;
 }
 
-// ── WAV encoder ───────────────────────────────────────────────────────────────
+// ── Recording helpers ─────────────────────────────────────────────────────────
 
-export function encodeWAV(Lchunks, Rchunks, sr) {
-  const merge = (cs) => {
-    const out = new Float32Array(cs.reduce((n, c) => n + c.length, 0));
-    let o = 0; cs.forEach((c) => { out.set(c, o); o += c.length; });
-    return out;
-  };
-  const L = merge(Lchunks), R = merge(Rchunks);
-  const n = Math.min(L.length, R.length);
-  const pcm = new Int16Array(n * 2);
-  for (let i = 0; i < n; i++) {
-    const l = Math.max(-1, Math.min(1, L[i]));
-    const r = Math.max(-1, Math.min(1, R[i]));
-    pcm[i * 2]     = l < 0 ? l * 0x8000 : l * 0x7fff;
-    pcm[i * 2 + 1] = r < 0 ? r * 0x8000 : r * 0x7fff;
-  }
-  const db  = pcm.length * 2;
-  const buf = new ArrayBuffer(44 + db);
-  const v   = new DataView(buf);
-  const ws  = (off, s) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
-  ws(0, "RIFF"); v.setUint32(4, 36 + db, true);
-  ws(8, "WAVE"); ws(12, "fmt ");
-  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 2, true);
-  v.setUint32(24, sr, true); v.setUint32(28, sr * 4, true);
-  v.setUint16(32, 4,  true); v.setUint16(34, 16, true);
-  ws(36, "data"); v.setUint32(40, db, true);
-  new Uint8Array(buf, 44).set(new Uint8Array(pcm.buffer));
-  return new Blob([buf], { type: "audio/wav" });
-}
+export const recordingLimit = (settings) => {
+  const n = Number(settings?.recordingLimit);
+  return Number.isFinite(n) && n >= 1 ? Math.min(Math.round(n), 20) : 5;
+};
+
+export const keepNewest = (recs, limit) =>
+  [...(recs ?? [])].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, Math.max(0, limit));
+
+export const fmtBytes = (n) => {
+  if (!Number.isFinite(n) || n <= 0) return "0 MB";
+  const mb = n / (1024 * 1024);
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(1)} MB`;
+};
 
 // ── Storage ───────────────────────────────────────────────────────────────────
 

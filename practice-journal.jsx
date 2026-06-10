@@ -2,13 +2,15 @@ import { useState, useEffect, useRef } from "react";
 import {
   BUCKET, CRITERIA, DEFAULT_EXCERPTS, DEFAULT_SETTINGS,
   isDue, formatDue, draftValid, emptyDraft, newId, shuffle,
-  advanceBucket, bucketSessions, encodeWAV, syncCards, KEYS, load, save, getCriteria,
+  advanceBucket, bucketSessions, syncCards, KEYS, load, save, getCriteria,
   itemTags, parseTags, isCardPinned, cardMatchesTag, sessionPool, buildQueue,
   weeklyStats, streakDays, BADGES, computeBadges, bucketTransitions, scoreColor,
   pomodoroMinutes, nextPhase, fmtClock, tapBpm,
   buildExport, validImport, restoreQueue,
   freqToNote, autoCorrelate,
+  recordingLimit, fmtBytes,
 } from "./src/lib/sr.js";
+import { listRecordings, saveRecording, deleteRecording, recordingUsage } from "./src/lib/recordings.js";
 import { supabase } from "./src/lib/supabase.js";
 import { stampAndUpsert, pullUserData } from "./src/lib/sync.js";
 
@@ -152,67 +154,201 @@ function SessionSlider({ value, onChange, dueCount, maxItems }) {
   );
 }
 
+// ── Recordings shared hook ────────────────────────────────────────────────────
+
+function useRecordings(itemId) {
+  const [recs,   setRecs] = useState([]);
+  const urlsRef           = useRef(new Map());
+
+  useEffect(() => {
+    let alive = true;
+    listRecordings(itemId).then((r) => { if (alive) setRecs(r); }).catch(() => {});
+    return () => { alive = false; };
+  }, [itemId]);
+
+  // Revoke all cached object URLs on unmount
+  useEffect(() => {
+    const urls = urlsRef.current;
+    return () => { urls.forEach((u) => URL.revokeObjectURL(u)); };
+  }, []);
+
+  const urlFor = (rec) => {
+    if (!urlsRef.current.has(rec.id)) urlsRef.current.set(rec.id, URL.createObjectURL(rec.blob));
+    return urlsRef.current.get(rec.id);
+  };
+
+  const removeRec = (id) => {
+    deleteRecording(id)
+      .then(() => listRecordings(itemId))
+      .then(setRecs)
+      .catch(() => {});
+    const u = urlsRef.current.get(id);
+    if (u) { URL.revokeObjectURL(u); urlsRef.current.delete(id); }
+  };
+
+  return { recs, setRecs, urlFor, removeRec };
+}
+
+// ── Recording rows (shared between Recorder and RecordingList) ────────────────
+
+function RecordingRows({ itemId, recs, urlFor, removeRec }) {
+  if (!recs.length) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+      {recs.map((r, i) => (
+        <div key={r.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, flexShrink: 0 }}>{i + 1}.</span>
+          <audio src={urlFor(r)} controls style={{ flex: 1, height: "26px", minWidth: 0 }} />
+          <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, flexShrink: 0 }}>{fmtClock(r.durationMs / 1000)}</span>
+          <a
+            href={urlFor(r)}
+            download={`take_${itemId}_${r.date.slice(0, 19).replace(/[:T]/g, "")}.webm`}
+            style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkMid, textDecoration: "none", border: `1px solid ${C.rule}`, padding: "2px 5px", borderRadius: "1px", flexShrink: 0 }}
+          >↓ webm</a>
+          <button
+            onClick={() => removeRec(r.id)}
+            style={{ ...inkBtn({ color: C.fail, letterSpacing: 0, fontSize: "0.85rem" }), flexShrink: 0 }}
+          >×</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── Recorder ──────────────────────────────────────────────────────────────────
 
-function Recorder({ itemId }) {
+function Recorder({ itemId, limit }) {
   const [state, setState] = useState("idle");
-  const [recs,  setRecs]  = useState([]);
   const [err,   setErr]   = useState("");
-  const ctxRef = useRef(null), procRef = useRef(null), streamRef = useRef(null);
-  const chunks = useRef({ L: [], R: [] });
+  const { recs, setRecs, urlFor, removeRec } = useRecordings(itemId);
+
+  const mediaRecorderRef = useRef(null);
+  const streamRef        = useRef(null);
+  const chunksRef        = useRef([]);
+  const startedAtRef     = useRef(0);
+  const limitRef         = useRef(limit);
+
+  useEffect(() => { limitRef.current = limit; }, [limit]);
+
+  // Cleanup on unmount: stop any active recording
+  useEffect(() => {
+    return () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
 
   const start = async () => {
     setErr("");
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 2, echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      });
       streamRef.current = stream;
-      const audioCtx = new AudioContext(); ctxRef.current = audioCtx;
-      const src  = audioCtx.createMediaStreamSource(stream);
-      const proc = audioCtx.createScriptProcessor(4096, 2, 2); procRef.current = proc;
-      chunks.current = { L: [], R: [] };
-      proc.onaudioprocess = (e) => {
-        chunks.current.L.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-        chunks.current.R.push(new Float32Array(e.inputBuffer.getChannelData(1)));
+      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "";
+      const recorder = new MediaRecorder(stream, {
+        ...(mime ? { mimeType: mime } : {}),
+        audioBitsPerSecond: 320_000,
+      });
+      mediaRecorderRef.current = recorder;
+      chunksRef.current = [];
+
+      recorder.ondataavailable = (e) => { if (e.data.size) chunksRef.current.push(e.data); };
+
+      recorder.onstop = () => {
+        const finalMime = mime || "audio/webm";
+        const rec = {
+          id:         newId().replace("item_", "rec_"),
+          itemId,
+          date:       new Date().toISOString(),
+          blob:       new Blob(chunksRef.current, { type: finalMime }),
+          durationMs: Math.round(performance.now() - startedAtRef.current),
+          format:     finalMime,
+        };
+        saveRecording(rec, limitRef.current)
+          .then(() => listRecordings(itemId))
+          .then(setRecs)
+          .catch((e) => setErr(e.message));
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
       };
-      const sink = audioCtx.createGain(); sink.gain.value = 0;
-      src.connect(proc); proc.connect(sink); sink.connect(audioCtx.destination);
+
+      recorder.start();
+      startedAtRef.current = performance.now();
       setState("recording");
-    } catch (e) { setErr(e.message); }
+    } catch (e) {
+      setErr(e.message);
+    }
   };
 
   const stop = () => {
-    const sr = ctxRef.current?.sampleRate ?? 48000;
-    procRef.current?.disconnect();
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    ctxRef.current?.close();
-    const url = URL.createObjectURL(encodeWAV(chunks.current.L, chunks.current.R, sr));
-    const ts  = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
-    setRecs((p) => [...p, { url, ts }]);
-    procRef.current = null; ctxRef.current = null; streamRef.current = null;
+    mediaRecorderRef.current?.stop();
     setState("idle");
   };
 
   return (
     <div style={{ marginTop: "1.5rem", paddingTop: "1rem", borderTop: `1px dashed ${C.rule}` }}>
       <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: recs.length ? "0.75rem" : 0 }}>
-        <button onClick={state === "idle" ? start : stop} style={{ fontFamily: F.body, fontStyle: "italic", fontSize: "0.95rem", padding: "3px 10px", background: "transparent", border: `1px solid ${state === "recording" ? C.fail : C.rule}`, color: state === "recording" ? C.fail : C.inkFaint, borderRadius: "1px", cursor: "pointer", display: "flex", alignItems: "center", gap: "6px" }}>
+        <button
+          onClick={state === "idle" ? start : stop}
+          style={{ fontFamily: F.body, fontStyle: "italic", fontSize: "0.95rem", padding: "3px 10px", background: "transparent", border: `1px solid ${state === "recording" ? C.fail : C.rule}`, color: state === "recording" ? C.fail : C.inkFaint, borderRadius: "1px", cursor: "pointer", display: "flex", alignItems: "center", gap: "6px" }}
+        >
           <span style={{ width: 6, height: 6, borderRadius: "50%", flexShrink: 0, background: state === "recording" ? C.fail : C.ruleDk, animation: state === "recording" ? "recpulse 1s infinite" : "none" }} />
           {state === "recording" ? "Stop recording" : "Record take"}
         </button>
         {err && <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.fail }}>{err}</span>}
       </div>
-      {recs.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-          {recs.map((r, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-              <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, flexShrink: 0 }}>{i + 1}.</span>
-              <audio src={r.url} controls style={{ flex: 1, height: "26px", minWidth: 0 }} />
-              <a href={r.url} download={`take_${itemId}_${r.ts.replace(/:/g, "")}.wav`} style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkMid, textDecoration: "none", border: `1px solid ${C.rule}`, padding: "2px 5px", borderRadius: "1px", flexShrink: 0 }}>↓ wav</a>
-            </div>
-          ))}
-        </div>
-      )}
+      <RecordingRows itemId={itemId} recs={recs} urlFor={urlFor} removeRec={removeRec} />
     </div>
+  );
+}
+
+// ── RecordingList (history view — no capture controls) ────────────────────────
+
+function RecordingList({ itemId }) {
+  const { recs, urlFor, removeRec } = useRecordings(itemId);
+  if (!recs.length) return null;
+  return (
+    <div style={{ marginTop: "0.5rem" }}>
+      <RecordingRows itemId={itemId} recs={recs} urlFor={urlFor} removeRec={removeRec} />
+    </div>
+  );
+}
+
+// ── Recordings settings section ───────────────────────────────────────────────
+
+function RecordingsSettings({ settings, setSettings }) {
+  const [usage, setUsage] = useState(null);
+  useEffect(() => { recordingUsage().then(setUsage).catch(() => {}); }, []);
+  return (
+    <>
+      <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.15em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.3rem" }}>Recordings</p>
+      <p style={{ fontStyle: "italic", fontSize: "0.95rem", color: C.inkMid, marginBottom: "0.75rem" }}>Keep the most recent takes per item; older ones are pruned automatically.</p>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.65rem 0" }}>
+        <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint }}>Takes kept per item</span>
+        <div style={{ display: "flex", alignItems: "baseline", gap: "0.5rem" }}>
+          <input
+            type="number" min={1} max={20}
+            value={recordingLimit(settings)}
+            onChange={(e) => {
+              const v = Math.max(1, Math.min(20, parseInt(e.target.value, 10) || 1));
+              setSettings((s) => ({ ...s, recordingLimit: v }));
+            }}
+            style={{ fontFamily: F.display, fontSize: "1.1rem", color: C.ink, background: "transparent", border: "none", borderBottom: `1px solid ${C.rule}`, outline: "none", width: "3rem", textAlign: "center", padding: "2px 0" }}
+          />
+          <span style={{ fontFamily: F.stamp, fontSize: "0.58rem", color: C.inkFaint, letterSpacing: "0.05em" }}>takes</span>
+        </div>
+      </div>
+      {usage !== null && (
+        <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", color: C.inkFaint, letterSpacing: "0.08em", marginTop: "0.25rem" }}>
+          storage used: {fmtBytes(usage)}
+        </p>
+      )}
+    </>
   );
 }
 
@@ -1363,6 +1499,10 @@ export default function App() {
 
       <Rule thick />
 
+      <RecordingsSettings settings={settings} setSettings={setSettings} />
+
+      <Rule thick />
+
       <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.15em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.3rem" }}>Backup</p>
       <p style={{ fontStyle: "italic", fontSize: "0.95rem", color: C.inkMid, marginBottom: "0.75rem" }}>Download all journal data as JSON, or restore from a backup file.</p>
 
@@ -1472,6 +1612,7 @@ export default function App() {
                   <span> · {transitions.map((b) => BUCKET[b].label).join(" → ")}</span>
                 )}
               </p>
+              <RecordingList itemId={it.id} />
             </div>
             <div style={{ borderTop: `1px solid ${C.rule}` }} />
           </div>
@@ -1684,7 +1825,7 @@ export default function App() {
       <PomodoroControls pomo={pomo} />
       <Tuner />
       <Metronome />
-      <Recorder itemId={item.id} />
+      <Recorder itemId={item.id} limit={recordingLimit(settings)} />
     </Page>
   );
 
