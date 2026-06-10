@@ -31,7 +31,7 @@ const longDate = () => new Date().toLocaleDateString("en-US", { weekday: "long",
 
 const C = {
   paper:   "#f5eed9", paperLt: "#faf6ec",
-  ink:     "#1c1209", inkMid:  "#4a3d2c", inkFaint: "#9a8a72",
+  ink:     "#1c1209", inkMid:  "#4a3d2c", inkFaint: "#76684f",
   rule:    "#d8cdb5", ruleDk:  "#b5a58a",
   action:  "#4a1a28",
   hot:     "#8b1a1a", warm: "#7a5017", cold: "#1a3d5c",
@@ -71,21 +71,26 @@ function Badge({ bucket }) {
   );
 }
 
-function MarkButton({ active, variant, onClick, children }) {
+function MarkButton({ active, variant, onClick, children, label }) {
   const ac = variant === "pass" ? C.pass : C.fail;
   return (
-    <button onClick={onClick} style={{ width: "2.6rem", height: "2.6rem", border: `1.5px solid ${active ? ac : C.rule}`, background: active ? ac : "transparent", color: active ? C.paperLt : C.inkFaint, borderRadius: "1px", cursor: "pointer", fontFamily: F.display, fontSize: "1.15rem", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.1s", lineHeight: 1 }}>
-      {children}
+    <button
+      onClick={onClick}
+      aria-label={label ? `${label}: ${variant === "pass" ? "pass" : "fail"}` : undefined}
+      aria-pressed={active}
+      style={{ width: "2.6rem", height: "2.6rem", border: `1.5px solid ${active ? ac : C.rule}`, background: active ? ac : "transparent", color: active ? C.paperLt : C.inkFaint, borderRadius: "1px", cursor: "pointer", fontFamily: F.display, fontSize: "1.15rem", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.1s", lineHeight: 1 }}>
+      <span aria-hidden="true">{children}</span>
     </button>
   );
 }
 
-function JournalInput({ value, onChange, placeholder, style = {} }) {
+function JournalInput({ value, onChange, placeholder, style = {}, ariaLabel }) {
   return (
     <input
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
+      aria-label={ariaLabel ?? placeholder}
       style={{ fontFamily: F.body, fontSize: "1rem", color: C.ink, background: "transparent", border: "none", borderBottom: `1px solid ${C.rule}`, outline: "none", width: "100%", padding: "3px 0 2px", borderRadius: 0, ...style }}
     />
   );
@@ -117,10 +122,11 @@ function ContextLine({ value, onChange }) {
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter") commit(); if (e.key === "Escape") cancel(); }}
         placeholder="Orchestra · instrument · date…"
+        aria-label="Journal context"
         style={{ fontFamily: F.body, fontStyle: "italic", fontSize: "1.05rem", color: C.inkMid, background: "transparent", border: "none", borderBottom: `1px solid ${C.ruleDk}`, outline: "none", flex: 1, padding: "2px 0" }}
       />
-      <button onClick={commit} style={inkBtn({ color: C.action })}>save</button>
-      <button onClick={cancel} style={inkBtn({ color: C.inkFaint })}>×</button>
+      <button onClick={commit} aria-label="Save context" style={inkBtn({ color: C.action })}>save</button>
+      <button onClick={cancel} aria-label="Cancel editing context" style={inkBtn({ color: C.inkFaint })}>×</button>
     </div>
   );
 
@@ -152,8 +158,8 @@ function SessionSlider({ value, onChange, dueCount, maxItems }) {
         </span>
       </div>
       <div style={{ position: "relative", paddingBottom: "1rem" }}>
-        <input type="range" min={1} max={max} value={Math.min(value, max)} onChange={(e) => onChange(Number(e.target.value))} style={{ width: "100%", margin: 0 }} />
-        <div style={{ display: "flex", justifyContent: "space-between", marginTop: "0.15rem" }}>
+        <input type="range" min={1} max={max} value={Math.min(value, max)} onChange={(e) => onChange(Number(e.target.value))} aria-label="Items per session" style={{ width: "100%", margin: 0 }} />
+        <div aria-hidden="true" style={{ display: "flex", justifyContent: "space-between", marginTop: "0.15rem" }}>
           {Array.from({ length: max }, (_, i) => i + 1).map((n) => (
             <span key={n} style={{ fontFamily: F.stamp, fontSize: "0.5rem", color: n === Math.min(value, max) ? C.inkMid : C.rule, lineHeight: 1, userSelect: "none" }}>
               {n === max ? "all" : n}
@@ -208,16 +214,18 @@ function RecordingRows({ itemId, recs, urlFor, removeRec }) {
     <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
       {recs.map((r, i) => (
         <div key={r.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, flexShrink: 0 }}>{i + 1}.</span>
-          <audio src={urlFor(r)} controls style={{ flex: 1, height: "26px", minWidth: 0 }} />
+          <span aria-hidden="true" style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, flexShrink: 0 }}>{i + 1}.</span>
+          <audio src={urlFor(r)} controls aria-label={`Recording from ${r.date ? new Date(r.date).toLocaleDateString() : `take ${i + 1}`}`} style={{ flex: 1, height: "26px", minWidth: 0 }} />
           <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, flexShrink: 0 }}>{fmtClock(r.durationMs / 1000)}</span>
           <a
             href={urlFor(r)}
             download={`take_${itemId}_${r.date.slice(0, 19).replace(/[:T]/g, "")}.webm`}
+            aria-label={`Download recording from ${r.date ? new Date(r.date).toLocaleDateString() : `take ${i + 1}`}`}
             style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkMid, textDecoration: "none", border: `1px solid ${C.rule}`, padding: "2px 5px", borderRadius: "1px", flexShrink: 0 }}
           >↓ webm</a>
           <button
             onClick={() => removeRec(r.id)}
+            aria-label="Delete recording"
             style={{ ...inkBtn({ color: C.fail, letterSpacing: 0, fontSize: "0.85rem" }), flexShrink: 0 }}
           >×</button>
         </div>
@@ -320,7 +328,7 @@ function Recorder({ itemId, limit, cloudOn, user }) {
           onClick={state === "idle" ? start : stop}
           style={{ fontFamily: F.body, fontStyle: "italic", fontSize: "0.95rem", padding: "3px 10px", background: "transparent", border: `1px solid ${state === "recording" ? C.fail : C.rule}`, color: state === "recording" ? C.fail : C.inkFaint, borderRadius: "1px", cursor: "pointer", display: "flex", alignItems: "center", gap: "6px" }}
         >
-          <span style={{ width: 6, height: 6, borderRadius: "50%", flexShrink: 0, background: state === "recording" ? C.fail : C.ruleDk, animation: state === "recording" ? "recpulse 1s infinite" : "none" }} />
+          <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: "50%", flexShrink: 0, background: state === "recording" ? C.fail : C.ruleDk, animation: state === "recording" ? "recpulse 1s infinite" : "none" }} />
           {state === "recording" ? "Stop recording" : "Record take"}
         </button>
         {err && <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.fail }}>{err}</span>}
@@ -381,13 +389,13 @@ function RecordingList({ itemId, user }) {
       <RecordingRows itemId={itemId} recs={recs} urlFor={urlFor} removeRec={removeRec} />
       {cloudOnly.map((r) => (
         <div key={r.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.4rem" }}>
-          <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, flexShrink: 0 }}>☁</span>
+          <span aria-hidden="true" style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, flexShrink: 0 }}>☁</span>
           <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {r.date ? new Date(r.date).toLocaleDateString() : r.name}
           </span>
           <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, flexShrink: 0 }}>{fmtBytes(r.size)}</span>
           {loadedMap[r.id] ? (
-            <audio src={loadedMap[r.id]} controls style={{ flex: 1, height: "26px", minWidth: 0 }} />
+            <audio src={loadedMap[r.id]} controls aria-label={`Cloud recording from ${r.date ? new Date(r.date).toLocaleDateString() : r.name}`} style={{ flex: 1, height: "26px", minWidth: 0 }} />
           ) : (
             <button
               onClick={() => handleLoad(r)}
@@ -428,6 +436,7 @@ function RecordingsSettings({ settings, setSettings, user }) {
           <input
             type="number" min={1} max={20}
             value={recordingLimit(settings)}
+            aria-label="Recordings kept per item"
             onChange={(e) => {
               const v = Math.max(1, Math.min(20, parseInt(e.target.value, 10) || 1));
               setSettings((s) => ({ ...s, recordingLimit: v }));
@@ -449,11 +458,13 @@ function RecordingsSettings({ settings, setSettings, user }) {
             <span>
               <button
                 onClick={() => setSettings((s) => ({ ...s, recordingStorage: "local" }))}
+                aria-pressed={mode === "local"}
                 style={inkBtn({ color: mode === "local" ? C.action : C.inkFaint })}
               >Local only</button>
               {" · "}
               <button
                 onClick={() => setSettings((s) => ({ ...s, recordingStorage: "cloud" }))}
+                aria-pressed={mode === "cloud"}
                 style={inkBtn({ color: mode === "cloud" ? C.action : C.inkFaint })}
               >Cloud</button>
             </span>
@@ -580,7 +591,7 @@ function Tuner() {
 
   return (
     <div style={{ marginTop: "1rem" }}>
-      <button onClick={handleToggleOpen} style={inkBtn({ color: C.inkFaint })}>
+      <button onClick={handleToggleOpen} aria-expanded={open} style={inkBtn({ color: C.inkFaint })}>
         Tuner {open ? "▾" : "▸"}
       </button>
       {open && (
@@ -590,6 +601,7 @@ function Tuner() {
             <span>
               <button
                 onClick={() => setMode("chromatic")}
+                aria-pressed={mode === "chromatic"}
                 style={inkBtn({ color: mode === "chromatic" ? C.action : C.inkFaint })}
               >
                 chromatic
@@ -597,6 +609,7 @@ function Tuner() {
               {" · "}
               <button
                 onClick={() => setMode("strobe")}
+                aria-pressed={mode === "strobe"}
                 style={inkBtn({ color: mode === "strobe" ? C.action : C.inkFaint })}
               >
                 strobe
@@ -604,6 +617,7 @@ function Tuner() {
             </span>
             <button
               onClick={running ? stop : start}
+              aria-label={running ? "Stop tuner" : "Start tuner"}
               style={{
                 fontFamily: F.body,
                 fontStyle: "italic",
@@ -660,6 +674,7 @@ function Tuner() {
                 {/* Strobe disc */}
                 <div
                   ref={discRef}
+                  aria-hidden="true"
                   style={{
                     width: "140px",
                     height: "140px",
@@ -801,34 +816,35 @@ function Metronome() {
 
   return (
     <div style={{ marginTop: "1rem" }}>
-      <button onClick={() => setOpen((o) => !o)} style={inkBtn({ color: C.inkFaint })}>
+      <button onClick={() => setOpen((o) => !o)} aria-expanded={open} style={inkBtn({ color: C.inkFaint })}>
         Metronome {open ? "▾" : "▸"}
       </button>
       {open && (
         <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: `1px dashed ${C.rule}` }}>
           {/* BPM row */}
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.6rem" }}>
-            <button onClick={() => setBpm((v) => Math.max(30, v - 2))} style={stepBtnStyle}>−</button>
+            <button onClick={() => setBpm((v) => Math.max(30, v - 2))} aria-label="Decrease tempo" style={stepBtnStyle}>−</button>
             <span style={{ fontFamily: F.display, fontSize: "1.4rem", fontWeight: 700, color: C.ink, minWidth: "3.5rem", textAlign: "center" }}>
               {bpm}
               <span style={{ fontFamily: F.stamp, fontSize: "0.55rem", color: C.inkFaint, marginLeft: "0.3rem", letterSpacing: "0.08em", verticalAlign: "middle" }}>bpm</span>
             </span>
-            <button onClick={() => setBpm((v) => Math.min(240, v + 2))} style={stepBtnStyle}>+</button>
+            <button onClick={() => setBpm((v) => Math.min(240, v + 2))} aria-label="Increase tempo" style={stepBtnStyle}>+</button>
           </div>
           {/* Tap / beats / start row */}
           <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
             <button
               onClick={handleTap}
+              aria-label="Tap tempo"
               style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase", padding: "3px 10px", background: "transparent", border: `1px solid ${C.rule}`, color: C.inkMid, borderRadius: "1px", cursor: "pointer" }}
             >
               tap
             </button>
             <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
-              <button onClick={() => setBeats((v) => Math.max(2, v - 1))} style={stepBtnStyle}>−</button>
+              <button onClick={() => setBeats((v) => Math.max(2, v - 1))} aria-label="Fewer beats per bar" style={stepBtnStyle}>−</button>
               <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkMid, letterSpacing: "0.05em", minWidth: "4.5rem", textAlign: "center" }}>
                 {beats} beats/bar
               </span>
-              <button onClick={() => setBeats((v) => Math.min(12, v + 1))} style={stepBtnStyle}>+</button>
+              <button onClick={() => setBeats((v) => Math.min(12, v + 1))} aria-label="More beats per bar" style={stepBtnStyle}>+</button>
             </div>
             <button
               onClick={running ? stop : start}
@@ -1019,6 +1035,9 @@ function Page({ children, wide }) {
         input[type="range"]::-moz-range-thumb { width: 11px; height: 11px; background: ${C.action}; border-radius: 1px; cursor: pointer; border: none; }
         input[type="range"]::-webkit-slider-runnable-track { background: ${C.ruleDk}; height: 1px; }
         input[type="range"]::-moz-range-track { background: ${C.ruleDk}; height: 1px; }
+        *:focus-visible { outline: 2px solid ${C.action}; outline-offset: 2px; }
+        button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid ${C.action}; outline-offset: 2px; }
+        @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; } }
       `}</style>
       <div style={{ maxWidth: wide ? 960 : 420, margin: "0 auto", padding: "2.25rem 1.5rem 3rem" }}>
         {children}
@@ -1061,6 +1080,9 @@ function useSync(user, applyUpdates, setConflict, notify) {
 
 function ConflictModal({ conflict, onKeepLocal, onUseCloud, onMerge }) {
   const [busy, setBusy] = useState(false);
+  const firstBtnRef = useRef(null);
+
+  useEffect(() => { firstBtnRef.current?.focus(); }, []);
 
   const handle = (fn) => async () => {
     setBusy(true);
@@ -1071,12 +1093,13 @@ function ConflictModal({ conflict, onKeepLocal, onUseCloud, onMerge }) {
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(28,18,9,0.45)", zIndex: 20, display: "flex", alignItems: "center", justifyContent: "center", padding: "1.5rem" }}>
-      <div style={{ background: C.paper, border: `1.5px solid ${C.ruleDk}`, borderRadius: "2px", padding: "1.5rem", maxWidth: 360, width: "100%" }}>
+      <div role="dialog" aria-modal="true" aria-labelledby="conflict-title" style={{ background: C.paper, border: `1.5px solid ${C.ruleDk}`, borderRadius: "2px", padding: "1.5rem", maxWidth: 360, width: "100%" }}>
         <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.5rem" }}>Account sync</p>
-        <h2 style={{ fontFamily: F.display, fontSize: "1.35rem", fontWeight: 700, color: C.ink, marginBottom: "0.6rem" }}>Two journals found</h2>
+        <h2 id="conflict-title" style={{ fontFamily: F.display, fontSize: "1.35rem", fontWeight: 700, color: C.ink, marginBottom: "0.6rem" }}>Two journals found</h2>
         <p style={{ fontFamily: F.body, fontStyle: "italic", fontSize: "1rem", color: C.inkMid, marginBottom: "1.1rem" }}>This account already has journal data, and this device has its own. Which should win?</p>
         <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
           <button
+            ref={firstBtnRef}
             disabled={busy}
             onClick={handle(onMerge)}
             style={{ background: C.action, border: "none", borderRadius: "2px", padding: "0.55rem 0.75rem", width: "100%", cursor: busy ? "not-allowed" : "pointer", fontFamily: F.display, fontSize: "1rem", fontWeight: 700, color: C.paperLt, opacity: busy ? 0.6 : 1 }}
@@ -1165,6 +1188,8 @@ function ScoreField({ itemId }) {
         type="file"
         accept="application/pdf,image/png,image/jpeg"
         ref={inputRef}
+        aria-hidden="true"
+        tabIndex={-1}
         style={{ display: "none" }}
         onChange={handleFile}
       />
@@ -1193,7 +1218,7 @@ function MobileScoreSection({ score, scoreUrl }) {
   if (!score || !scoreUrl) return null;
   return (
     <div style={{ marginTop: "1rem" }}>
-      <button onClick={() => setOpen((o) => !o)} style={inkBtn({ color: C.inkFaint })}>
+      <button onClick={() => setOpen((o) => !o)} aria-expanded={open} style={inkBtn({ color: C.inkFaint })}>
         Sheet music {open ? "▾" : "▸"}
       </button>
       {open && (
@@ -1229,7 +1254,7 @@ function PomodoroControls({ pomo }) {
   const [open, setOpen] = useState(false);
   return (
     <div style={{ marginTop: "1rem" }}>
-      <button onClick={() => setOpen((o) => !o)} style={inkBtn({ color: C.inkFaint })}>
+      <button onClick={() => setOpen((o) => !o)} aria-expanded={open} style={inkBtn({ color: C.inkFaint })}>
         Pomodoro {open ? "▾" : "▸"}
       </button>
       {open && (
@@ -1540,8 +1565,8 @@ export default function App() {
             <span title="Syncing…" style={{ fontFamily: F.stamp, fontSize: "0.75rem", color: C.inkFaint, display: "inline-block", animation: "syncspin 1.2s linear infinite", lineHeight: 1 }}>↻</span>
           )}
           {syncStatus === "error" && (
-            <button onClick={() => user && flushQueue(user)} title="Sync failed — click to retry" style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}>
-              <span style={{ fontFamily: F.stamp, fontSize: "0.75rem", color: C.warm, lineHeight: 1 }}>⚠</span>
+            <button onClick={() => user && flushQueue(user)} aria-label="Retry sync" title="Sync failed — click to retry" style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+              <span aria-hidden="true" style={{ fontFamily: F.stamp, fontSize: "0.75rem", color: C.warm, lineHeight: 1 }}>⚠</span>
             </button>
           )}
           <AccountButton user={user} signIn={signIn} signOut={signOut} />
@@ -1594,6 +1619,7 @@ export default function App() {
                 <button
                   key={tag}
                   onClick={() => setTagFilter(active ? null : tag)}
+                  aria-pressed={tagFilter === tag}
                   style={{
                     fontFamily: F.stamp, fontSize: "0.58rem", textTransform: "uppercase",
                     letterSpacing: "0.1em", padding: "2px 8px", borderRadius: "1px",
@@ -1743,7 +1769,7 @@ export default function App() {
       </div>
 
       {toast && (
-        <div style={{ position: "fixed", bottom: "1.5rem", left: "50%", transform: "translateX(-50%)", background: C.paperLt, border: `1.5px solid ${C.action}`, borderRadius: "2px", padding: "0.6rem 1.1rem", boxShadow: "0 2px 12px rgba(28,18,9,0.18)", zIndex: 10 }}>
+        <div role="status" aria-live="polite" style={{ position: "fixed", bottom: "1.5rem", left: "50%", transform: "translateX(-50%)", background: C.paperLt, border: `1.5px solid ${C.action}`, borderRadius: "2px", padding: "0.6rem 1.1rem", boxShadow: "0 2px 12px rgba(28,18,9,0.18)", zIndex: 10 }}>
           <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.2rem" }}>{toast.kind === "badge" ? "Badge earned" : "Account"}</p>
           <p style={{ fontFamily: F.display, fontSize: "1.05rem", fontWeight: 700, color: C.action }}>{toast.label}</p>
         </div>
@@ -1808,6 +1834,7 @@ export default function App() {
               <input
                 type="number" min={1} max={9}
                 value={bucketSessions(b, settings)}
+                aria-label={`${b.charAt(0).toUpperCase() + b.slice(1)} interval`}
                 onChange={(e) => {
                   const v = Math.max(1, Math.min(9, parseInt(e.target.value, 10) || 1));
                   setSettings((s) => ({ ...s, intervals: { ...(s.intervals ?? {}), [b]: v } }));
@@ -1845,6 +1872,7 @@ export default function App() {
               <JournalInput
                 value={c.label}
                 placeholder="Criterion label"
+                ariaLabel={`Criterion ${i + 1} label`}
                 onChange={(v) => {
                   const base = settings.criteria ?? CRITERIA.map((cr) => ({ ...cr }));
                   const updated = base.map((cr, j) => j === i ? { ...cr, label: v } : cr);
@@ -1859,6 +1887,7 @@ export default function App() {
                 setSettings((s) => ({ ...s, criteria: updated }));
               }}
               disabled={(settings.criteria ?? CRITERIA).length <= 1}
+              aria-label={`Remove criterion ${i + 1}`}
               style={inkBtn({ color: C.fail, letterSpacing: 0, fontSize: "0.85rem", opacity: (settings.criteria ?? CRITERIA).length <= 1 ? 0.3 : 1, cursor: (settings.criteria ?? CRITERIA).length <= 1 ? "not-allowed" : "pointer" })}
             >
               ×
@@ -1898,9 +1927,9 @@ export default function App() {
       <p style={{ fontStyle: "italic", fontSize: "0.95rem", color: C.inkMid, marginBottom: "0.75rem" }}>Work and break lengths in minutes.</p>
 
       {[
-        { key: "work",  label: "Work"  },
-        { key: "break", label: "Break" },
-      ].map(({ key, label }, i) => (
+        { key: "work",  label: "Work",  ariaLabel: "Work minutes"  },
+        { key: "break", label: "Break", ariaLabel: "Break minutes" },
+      ].map(({ key, label, ariaLabel }, i) => (
         <div key={key}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.65rem 0" }}>
             <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint }}>{label}</span>
@@ -1908,6 +1937,7 @@ export default function App() {
               <input
                 type="number" min={1} max={120}
                 value={pomodoroMinutes(settings, key)}
+                aria-label={ariaLabel}
                 onChange={(e) => {
                   const v = Math.max(1, Math.min(120, parseInt(e.target.value, 10) || 1));
                   setSettings((s) => ({ ...s, pomodoro: { ...(s.pomodoro ?? {}), [key]: v } }));
@@ -1934,6 +1964,8 @@ export default function App() {
         type="file"
         accept="application/json,.json"
         ref={importRef}
+        aria-hidden="true"
+        tabIndex={-1}
         style={{ display: "none" }}
         onChange={(e) => {
           const file = e.target.files[0];
@@ -2104,6 +2136,7 @@ export default function App() {
                     value={editDraft.notes}
                     onChange={(e) => setEditDraft((d) => ({ ...d, notes: e.target.value }))}
                     placeholder="Practice notes, tips, context…"
+                    aria-label="Notes"
                     style={{ fontFamily: F.body, fontSize: "0.95rem", color: C.ink, background: "transparent", border: `1px solid ${C.rule}`, outline: "none", width: "100%", padding: "6px 8px", borderRadius: "1px", resize: "vertical", minHeight: "3.5rem" }}
                   />
                 </div>
@@ -2136,12 +2169,14 @@ export default function App() {
                   {card && <Badge bucket={card.bucket} />}
                   <button
                     onClick={() => setItems((prev) => prev.map((e) => e.id !== it.id ? e : { ...e, pinned: !e.pinned }))}
+                    aria-label={it.pinned ? "Unpin item" : "Pin item"}
+                    aria-pressed={!!it.pinned}
                     style={inkBtn({ color: it.pinned ? C.action : C.inkFaint })}
                   >
                     {it.pinned ? "pinned" : "pin"}
                   </button>
-                  <button onClick={() => startEdit(it)} style={inkBtn({ color: C.inkFaint })}>edit</button>
-                  <button onClick={() => deleteItem(it.id)} style={inkBtn({ color: C.fail, letterSpacing: 0, fontSize: "0.85rem" })}>×</button>
+                  <button onClick={() => startEdit(it)} aria-label={`Edit ${it.composer} ${it.title}`} style={inkBtn({ color: C.inkFaint })}>edit</button>
+                  <button onClick={() => deleteItem(it.id)} aria-label={`Delete ${it.composer} ${it.title}`} style={inkBtn({ color: C.fail, letterSpacing: 0, fontSize: "0.85rem" })}>×</button>
                 </div>
               </div>
             )}
@@ -2178,6 +2213,7 @@ export default function App() {
                 value={newDraft.notes}
                 onChange={(e) => setNewDraft((d) => ({ ...d, notes: e.target.value }))}
                 placeholder="Practice notes, tips, context…"
+                aria-label="Notes"
                 style={{ fontFamily: F.body, fontSize: "0.95rem", color: C.ink, background: "transparent", border: `1px solid ${C.rule}`, outline: "none", width: "100%", padding: "6px 8px", borderRadius: "1px", resize: "vertical", minHeight: "3.5rem" }}
               />
             </div>
@@ -2216,7 +2252,7 @@ export default function App() {
           <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, letterSpacing: "0.08em" }}>{idx + 1} of {queue.length}</span>
         </div>
 
-        <div style={{ display: "flex", gap: "4px", marginBottom: "1.5rem" }}>
+        <div aria-hidden="true" style={{ display: "flex", gap: "4px", marginBottom: "1.5rem" }}>
           {queue.map((_, i) => <div key={i} style={{ height: 2, flex: 1, borderRadius: 1, background: i < idx ? C.inkMid : i === idx ? C.action : C.rule }} />)}
         </div>
 
@@ -2245,8 +2281,8 @@ export default function App() {
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.65rem 0" }}>
                 <span style={{ fontSize: "1.1rem", color: C.ink }}>{c.label}</span>
                 <div style={{ display: "flex", gap: "0.4rem" }}>
-                  <MarkButton active={scores[c.id] === true}  variant="pass" onClick={() => toggleScore(c.id, true)}>✓</MarkButton>
-                  <MarkButton active={scores[c.id] === false} variant="fail" onClick={() => toggleScore(c.id, false)}>✗</MarkButton>
+                  <MarkButton active={scores[c.id] === true}  variant="pass" label={c.label} onClick={() => toggleScore(c.id, true)}>✓</MarkButton>
+                  <MarkButton active={scores[c.id] === false} variant="fail" label={c.label} onClick={() => toggleScore(c.id, false)}>✗</MarkButton>
                 </div>
               </div>
               {i < criteria.length - 1 && <div style={{ borderTop: `1px solid ${C.rule}` }} />}
@@ -2347,6 +2383,7 @@ export default function App() {
         <textarea
           value={sessionNote}
           onChange={(e) => setSessionNote(e.target.value)}
+          aria-label="Session note"
           style={{ fontFamily: F.body, fontSize: "1rem", color: C.ink, background: "transparent", border: `1px solid ${C.rule}`, outline: "none", width: "100%", padding: "8px 10px", borderRadius: "1px", resize: "vertical", minHeight: "6rem" }}
         />
         <button
