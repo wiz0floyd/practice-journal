@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   BUCKET, CRITERIA, DEFAULT_EXCERPTS, DEFAULT_SETTINGS,
   isDue, formatDue, draftValid, emptyDraft, newId, shuffle,
@@ -14,7 +14,10 @@ import {
 import { listRecordings, saveRecording, deleteRecording, recordingUsage } from "./src/lib/recordings.js";
 import { getAttachment, saveAttachment, deleteAttachment } from "./src/lib/attachments.js";
 import { supabase } from "./src/lib/supabase.js";
-import { stampAndUpsert, pullUserData } from "./src/lib/sync.js";
+import {
+  stampAndUpsert, pullUserData, fetchAllRows, uploadAll, applyRows,
+  migrationPlan, mergeById, isMigrated, setMigrated, SYNC_KEYS,
+} from "./src/lib/sync.js";
 
 const longDate = () => new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
 
@@ -893,39 +896,66 @@ function Page({ children, wide }) {
 
 // ── Cloud sync ────────────────────────────────────────────────────────────────
 
-function useSync(user, setItems, setCards, setContext, setSettings, setSessions, setBadges, items, serverDataRef) {
+function useSync(user, applyUpdates, setConflict, notify) {
   useEffect(() => {
     if (!user) return;
-    pullUserData(user).then((updates) => {
-      if (!updates) return;
-      if (updates[KEYS.items] !== undefined) {
-        serverDataRef.current[KEYS.items] = updates[KEYS.items];
-        setItems(updates[KEYS.items]);
+    (async () => {
+      if (isMigrated(user.id)) {
+        const updates = await pullUserData(user);
+        if (updates) applyUpdates(updates);
+        return;
       }
-      if (updates[KEYS.cards] !== undefined) {
-        const effectiveItems = updates[KEYS.items] ?? items;
-        const reconciledCards = syncCards(effectiveItems, updates[KEYS.cards]);
-        serverDataRef.current[KEYS.cards] = reconciledCards;
-        setCards(reconciledCards);
+      const rows = await fetchAllRows(user);
+      if (rows === null) return; // offline/unconfigured: try again next sign-in, no flag set
+      const plan = migrationPlan(rows, load(KEYS.meta, {}));
+      if (plan === "upload") {
+        const ok = await uploadAll(user);
+        if (ok) { setMigrated(user.id); notify("Your local data has been saved to your account."); }
+      } else if (plan === "pull") {
+        const updates = applyRows(rows);
+        applyUpdates(updates);
+        setMigrated(user.id);
+        const n = (updates[KEYS.items] ?? []).length;
+        notify(`Synced ${n} item${n === 1 ? "" : "s"} from your account.`);
+      } else {
+        setConflict(rows); // modal decides; flag set on choice
       }
-      if (updates[KEYS.context] !== undefined) {
-        serverDataRef.current[KEYS.context] = updates[KEYS.context];
-        setContext(updates[KEYS.context]);
-      }
-      if (updates[KEYS.settings] !== undefined) {
-        serverDataRef.current[KEYS.settings] = updates[KEYS.settings];
-        setSettings(updates[KEYS.settings]);
-      }
-      if (updates[KEYS.sessions] !== undefined) {
-        serverDataRef.current[KEYS.sessions] = updates[KEYS.sessions];
-        setSessions(updates[KEYS.sessions]);
-      }
-      if (updates[KEYS.badges] !== undefined) {
-        serverDataRef.current[KEYS.badges] = updates[KEYS.badges];
-        setBadges(updates[KEYS.badges]);
-      }
-    });
+    })();
   }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+// ── Conflict modal ────────────────────────────────────────────────────────────
+
+function ConflictModal({ conflict, onKeepLocal, onUseCloud, onMerge }) {
+  const [busy, setBusy] = useState(false);
+
+  const handle = (fn) => async () => {
+    setBusy(true);
+    try { await fn(); } finally { setBusy(false); }
+  };
+
+  const borderedBtn = { background: "transparent", border: `1px solid ${C.ruleDk}`, borderRadius: "2px", padding: "0.5rem 0.75rem", width: "100%", cursor: "pointer", fontFamily: F.body, fontStyle: "italic", fontSize: "1rem", color: C.ink, opacity: busy ? 0.6 : 1 };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(28,18,9,0.45)", zIndex: 20, display: "flex", alignItems: "center", justifyContent: "center", padding: "1.5rem" }}>
+      <div style={{ background: C.paper, border: `1.5px solid ${C.ruleDk}`, borderRadius: "2px", padding: "1.5rem", maxWidth: 360, width: "100%" }}>
+        <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.5rem" }}>Account sync</p>
+        <h2 style={{ fontFamily: F.display, fontSize: "1.35rem", fontWeight: 700, color: C.ink, marginBottom: "0.6rem" }}>Two journals found</h2>
+        <p style={{ fontFamily: F.body, fontStyle: "italic", fontSize: "1rem", color: C.inkMid, marginBottom: "1.1rem" }}>This account already has journal data, and this device has its own. Which should win?</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+          <button
+            disabled={busy}
+            onClick={handle(onMerge)}
+            style={{ background: C.action, border: "none", borderRadius: "2px", padding: "0.55rem 0.75rem", width: "100%", cursor: busy ? "not-allowed" : "pointer", fontFamily: F.display, fontSize: "1rem", fontWeight: 700, color: C.paperLt, opacity: busy ? 0.6 : 1 }}
+          >
+            Merge (keep everything)
+          </button>
+          <button disabled={busy} onClick={handle(onUseCloud)} style={borderedBtn}>Use cloud data</button>
+          <button disabled={busy} onClick={handle(onKeepLocal)} style={borderedBtn}>Keep this device&apos;s data</button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -1113,6 +1143,7 @@ export default function App() {
   const [sessions,      setSessions]      = useState(() => load(KEYS.sessions, []));
   const [badges,        setBadges]        = useState(() => load(KEYS.badges, {}));
   const [toast,         setToast]         = useState(null);
+  const [conflict,      setConflict]      = useState(null);
   const [view,          setView]          = useState("dash");
   const [queue,         setQueue]         = useState([]);
   const [idx,           setIdx]           = useState(0);
@@ -1144,7 +1175,38 @@ export default function App() {
   // only after the first render's save effects have already run.
   const isMounted = useRef(false);
 
-  useSync(user, setItems, setCards, setContext, setSettings, setSessions, setBadges, items, serverDataRef);
+  const applyUpdates = useCallback((updates) => {
+    if (updates[KEYS.items] !== undefined) {
+      serverDataRef.current[KEYS.items] = updates[KEYS.items];
+      setItems(updates[KEYS.items]);
+    }
+    if (updates[KEYS.cards] !== undefined) {
+      const effectiveItems = updates[KEYS.items] ?? load(KEYS.items, DEFAULT_EXCERPTS);
+      const reconciledCards = syncCards(effectiveItems, updates[KEYS.cards]);
+      serverDataRef.current[KEYS.cards] = reconciledCards;
+      setCards(reconciledCards);
+    }
+    if (updates[KEYS.context] !== undefined) {
+      serverDataRef.current[KEYS.context] = updates[KEYS.context];
+      setContext(updates[KEYS.context]);
+    }
+    if (updates[KEYS.settings] !== undefined) {
+      serverDataRef.current[KEYS.settings] = updates[KEYS.settings];
+      setSettings(updates[KEYS.settings]);
+    }
+    if (updates[KEYS.sessions] !== undefined) {
+      serverDataRef.current[KEYS.sessions] = updates[KEYS.sessions];
+      setSessions(updates[KEYS.sessions]);
+    }
+    if (updates[KEYS.badges] !== undefined) {
+      serverDataRef.current[KEYS.badges] = updates[KEYS.badges];
+      setBadges(updates[KEYS.badges]);
+    }
+  }, []);
+
+  const notify = useCallback((message) => setToast({ kind: "info", label: message }), []);
+
+  useSync(user, applyUpdates, setConflict, notify);
 
   useEffect(() => {
     save(KEYS.items, items);
@@ -1204,7 +1266,7 @@ export default function App() {
     const newIds = earned.filter((id) => !(id in badges));
     if (newIds.length > 0) {
       setBadges((p) => ({ ...p, ...Object.fromEntries(newIds.map((id) => [id, new Date().toISOString()])) })); // eslint-disable-line react-hooks/set-state-in-effect
-      setToast(BADGES.find((b) => b.id === newIds[0]).label);
+      setToast({ kind: "badge", label: BADGES.find((b) => b.id === newIds[0]).label });
     }
   }, [sessions, cards]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1498,9 +1560,44 @@ export default function App() {
 
       {toast && (
         <div style={{ position: "fixed", bottom: "1.5rem", left: "50%", transform: "translateX(-50%)", background: C.paperLt, border: `1.5px solid ${C.action}`, borderRadius: "2px", padding: "0.6rem 1.1rem", boxShadow: "0 2px 12px rgba(28,18,9,0.18)", zIndex: 10 }}>
-          <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.2rem" }}>Badge earned</p>
-          <p style={{ fontFamily: F.display, fontSize: "1.05rem", fontWeight: 700, color: C.action }}>{toast}</p>
+          <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.2rem" }}>{toast.kind === "badge" ? "Badge earned" : "Account"}</p>
+          <p style={{ fontFamily: F.display, fontSize: "1.05rem", fontWeight: 700, color: C.action }}>{toast.label}</p>
         </div>
+      )}
+
+      {conflict && (
+        <ConflictModal
+          conflict={conflict}
+          onKeepLocal={async () => {
+            await uploadAll(user);
+            setMigrated(user.id);
+            setConflict(null);
+          }}
+          onUseCloud={() => {
+            const updates = applyRows(conflict);
+            applyUpdates(updates);
+            setMigrated(user.id);
+            setConflict(null);
+          }}
+          onMerge={() => {
+            const serverByKey = Object.fromEntries(conflict.map((r) => [r.key, r.value]));
+            const mergedItems = mergeById(serverByKey[KEYS.items], load(KEYS.items, []));
+            const mergedCards = syncCards(mergedItems, mergeById(serverByKey[KEYS.cards], load(KEYS.cards, [])));
+            const seen = new Set();
+            const mergedSessions = [...(serverByKey[KEYS.sessions] ?? []), ...load(KEYS.sessions, [])].filter((s) => !seen.has(s.date) && seen.add(s.date));
+            const mergedBadges = { ...load(KEYS.badges, {}), ...(serverByKey[KEYS.badges] ?? {}) };
+            const mergedContext = serverByKey[KEYS.context] !== undefined ? serverByKey[KEYS.context] : load(KEYS.context, "");
+            const mergedSettings = serverByKey[KEYS.settings] !== undefined ? serverByKey[KEYS.settings] : load(KEYS.settings, DEFAULT_SETTINGS);
+            setItems(mergedItems);
+            setCards(mergedCards);
+            setSessions(mergedSessions);
+            setBadges(mergedBadges);
+            setContext(mergedContext);
+            setSettings(mergedSettings);
+            setMigrated(user.id);
+            setConflict(null);
+          }}
+        />
       )}
     </Page>
   );
