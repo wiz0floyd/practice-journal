@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   isDue, formatDue, draftValid, advanceBucket, bucketSessions,
-  syncCards, shuffle, encodeWAV, DEFAULT_SETTINGS,
+  syncCards, shuffle, encodeWAV, DEFAULT_SETTINGS, CRITERIA, getCriteria,
 } from './sr.js'
 
 describe('isDue', () => {
@@ -173,5 +173,67 @@ describe('encodeWAV', () => {
 
   it('clamps float values to [-1, 1] without throwing', () => {
     expect(() => encodeWAV([chunk([2.0, -3.0])], [chunk([1.5, -1.5])], 44100)).not.toThrow()
+  })
+})
+
+describe('getCriteria', () => {
+  it('falls back to CRITERIA for undefined settings', () => {
+    expect(getCriteria(undefined)).toBe(CRITERIA)
+  })
+
+  it('falls back to CRITERIA when settings.criteria is empty array', () => {
+    expect(getCriteria({ criteria: [] })).toBe(CRITERIA)
+  })
+
+  it('falls back to CRITERIA when all entries have empty labels', () => {
+    expect(getCriteria({ criteria: [{ id: 'a', label: '' }, { id: 'b', label: '   ' }] })).toBe(CRITERIA)
+  })
+
+  it('returns custom list when entries have valid labels', () => {
+    const custom = [{ id: 'x', label: 'Bow Speed' }, { id: 'y', label: 'Vibrato' }]
+    const result = getCriteria({ criteria: custom })
+    expect(result).toHaveLength(2)
+    expect(result[0].label).toBe('Bow Speed')
+  })
+
+  it('filters out empty-label entries', () => {
+    const custom = [{ id: 'a', label: 'Good' }, { id: 'b', label: '' }, { id: 'c', label: 'Also Good' }]
+    const result = getCriteria({ criteria: custom })
+    expect(result).toHaveLength(2)
+    expect(result.map((c) => c.label)).toEqual(['Good', 'Also Good'])
+  })
+
+  it('caps at 6 entries', () => {
+    const custom = Array.from({ length: 8 }, (_, i) => ({ id: `c${i}`, label: `Criterion ${i}` }))
+    expect(getCriteria({ criteria: custom })).toHaveLength(6)
+  })
+})
+
+describe('advanceBucket proportional', () => {
+  // total = 6
+  it('promotes on 5/6 (>0.75)', () => {
+    expect(advanceBucket('hot', 5, 6)).toBe('warm')
+  })
+  it('keeps unchanged on 4/6 (>0.5, ≤0.75)', () => {
+    expect(advanceBucket('hot', 4, 6)).toBe('hot')
+  })
+  it('demotes on 3/6 (≤0.5)', () => {
+    expect(advanceBucket('warm', 3, 6)).toBe('hot')
+  })
+
+  // total = 2
+  it('promotes on 2/2 (>0.75)', () => {
+    expect(advanceBucket('hot', 2, 2)).toBe('warm')
+  })
+  it('demotes on 1/2 (=0.5, ≤0.5)', () => {
+    expect(advanceBucket('warm', 1, 2)).toBe('hot')
+  })
+
+  // total = 1
+  it('promotes on 1/1 (>0.75)', () => {
+    expect(advanceBucket('hot', 1, 1)).toBe('warm')
+  })
+  it('demotes on 0/1 (=0, ≤0.5)', () => {
+    expect(advanceBucket('warm', 0, 1)).toBe('hot')
   })
 })
