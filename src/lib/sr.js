@@ -22,6 +22,7 @@ export const BUCKET = {
 
 export const DEFAULT_SETTINGS = {
   intervals: { hot: 1, warm: 2, cold: 3 },
+  pomodoro:  { work: 25, break: 5 },
 };
 
 /** Sessions between reviews for a bucket, honoring user settings (clamped 1–9). */
@@ -77,6 +78,31 @@ export const advanceBucket = (cur, ups, total = 4) => {
   if (ups / total > 0.75) return BUCKET[cur].up ?? cur;
   if (ups / total <= 0.5) return BUCKET[cur].dn ?? cur;
   return cur;
+};
+
+// ── Pomodoro / metronome helpers ──────────────────────────────────────────────
+
+export const pomodoroMinutes = (settings, phase) => {
+  const d = settings?.pomodoro ?? {};
+  const n = Number(phase === "break" ? d.break : d.work);
+  const fallback = phase === "break" ? 5 : 25;
+  return Number.isFinite(n) && n >= 1 ? Math.min(Math.round(n), 120) : fallback;
+};
+
+export const nextPhase = (phase) => (phase === "work" ? "break" : "work");
+
+export const fmtClock = (totalSeconds) => {
+  const s = Math.max(0, Math.round(totalSeconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+
+export const tapBpm = (taps) => {
+  if (!taps || taps.length < 2) return null;
+  const recent = taps.slice(-4);
+  const gaps = recent.slice(1).map((t, i) => t - recent[i]);
+  const avg = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+  if (!avg) return null;
+  return Math.max(30, Math.min(240, Math.round(60000 / avg)));
 };
 
 // ── WAV encoder ───────────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import {
   advanceBucket, bucketSessions, encodeWAV, syncCards, KEYS, load, save, getCriteria,
   itemTags, parseTags, isCardPinned, cardMatchesTag, sessionPool, buildQueue,
   weeklyStats, streakDays, BADGES, computeBadges, bucketTransitions, scoreColor,
+  pomodoroMinutes, nextPhase, fmtClock, tapBpm,
 } from "./src/lib/sr.js";
 import { supabase } from "./src/lib/supabase.js";
 import { stampAndUpsert, pullUserData } from "./src/lib/sync.js";
@@ -213,6 +214,234 @@ function Recorder({ itemId }) {
   );
 }
 
+// ── Metronome ─────────────────────────────────────────────────────────────────
+
+function Metronome() {
+  const [bpm,     setBpm]     = useState(80);
+  const [beats,   setBeats]   = useState(4);
+  const [running, setRunning] = useState(false);
+  const [open,    setOpen]    = useState(false);
+
+  const ctxRef         = useRef(null);
+  const intervalRef    = useRef(null);
+  const nextNoteRef    = useRef(0);
+  const beatIndexRef   = useRef(0);
+  const bpmRef         = useRef(bpm);
+  const beatsRef       = useRef(beats);
+  const tapsRef        = useRef([]);
+
+  useEffect(() => { bpmRef.current = bpm; }, [bpm]);
+  useEffect(() => { beatsRef.current = beats; }, [beats]);
+
+  const schedule = () => {
+    const ctx = ctxRef.current;
+    if (!ctx) return;
+    while (nextNoteRef.current < ctx.currentTime + 0.1) {
+      const t    = nextNoteRef.current;
+      const freq = beatIndexRef.current % beatsRef.current === 0 ? 1000 : 760;
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "square";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.4, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.06);
+      nextNoteRef.current += 60 / bpmRef.current;
+      beatIndexRef.current++;
+    }
+  };
+
+  const start = () => {
+    if (!ctxRef.current) {
+      ctxRef.current = new AudioContext();
+    } else if (ctxRef.current.state === "suspended") {
+      ctxRef.current.resume();
+    }
+    nextNoteRef.current = ctxRef.current.currentTime + 0.05;
+    beatIndexRef.current = 0;
+    intervalRef.current = setInterval(schedule, 25);
+    setRunning(true);
+  };
+
+  const stop = () => {
+    clearInterval(intervalRef.current);
+    intervalRef.current = null;
+    setRunning(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      clearInterval(intervalRef.current);
+      ctxRef.current?.close();
+    };
+  }, []);
+
+  const handleTap = () => {
+    const now = Date.now();
+    const prev = tapsRef.current;
+    if (prev.length > 0 && now - prev[prev.length - 1] > 3000) {
+      tapsRef.current = [];
+    }
+    tapsRef.current = [...tapsRef.current, now];
+    const b = tapBpm(tapsRef.current);
+    if (b) setBpm(b);
+  };
+
+  const stepBtnStyle = {
+    width: "2rem", height: "2rem",
+    border: `1px solid ${C.rule}`,
+    background: "transparent",
+    color: C.inkMid,
+    borderRadius: "1px",
+    cursor: "pointer",
+    fontFamily: F.display,
+    fontSize: "1rem",
+    fontWeight: 700,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    lineHeight: 1,
+  };
+
+  return (
+    <div style={{ marginTop: "1rem" }}>
+      <button onClick={() => setOpen((o) => !o)} style={inkBtn({ color: C.inkFaint })}>
+        Metronome {open ? "▾" : "▸"}
+      </button>
+      {open && (
+        <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: `1px dashed ${C.rule}` }}>
+          {/* BPM row */}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.6rem" }}>
+            <button onClick={() => setBpm((v) => Math.max(30, v - 2))} style={stepBtnStyle}>−</button>
+            <span style={{ fontFamily: F.display, fontSize: "1.4rem", fontWeight: 700, color: C.ink, minWidth: "3.5rem", textAlign: "center" }}>
+              {bpm}
+              <span style={{ fontFamily: F.stamp, fontSize: "0.55rem", color: C.inkFaint, marginLeft: "0.3rem", letterSpacing: "0.08em", verticalAlign: "middle" }}>bpm</span>
+            </span>
+            <button onClick={() => setBpm((v) => Math.min(240, v + 2))} style={stepBtnStyle}>+</button>
+          </div>
+          {/* Tap / beats / start row */}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
+            <button
+              onClick={handleTap}
+              style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase", padding: "3px 10px", background: "transparent", border: `1px solid ${C.rule}`, color: C.inkMid, borderRadius: "1px", cursor: "pointer" }}
+            >
+              tap
+            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+              <button onClick={() => setBeats((v) => Math.max(2, v - 1))} style={stepBtnStyle}>−</button>
+              <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkMid, letterSpacing: "0.05em", minWidth: "4.5rem", textAlign: "center" }}>
+                {beats} beats/bar
+              </span>
+              <button onClick={() => setBeats((v) => Math.min(12, v + 1))} style={stepBtnStyle}>+</button>
+            </div>
+            <button
+              onClick={running ? stop : start}
+              style={{ fontFamily: F.body, fontStyle: "italic", fontSize: "0.95rem", padding: "3px 10px", background: "transparent", border: `1px solid ${running ? C.fail : C.rule}`, color: running ? C.fail : C.inkFaint, borderRadius: "1px", cursor: "pointer" }}
+            >
+              {running ? "Stop" : "Start"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Pomodoro hook ─────────────────────────────────────────────────────────────
+
+function usePomodoro(settings) {
+  const [phase,     setPhase]     = useState("idle");
+  const [remaining, setRemaining] = useState(0);
+  const [paused,    setPaused]    = useState(false);
+
+  // Refs hold live mutable values for the interval callback without re-creating it.
+  const endsAtRef   = useRef(null);  // ms timestamp when current phase ends
+  const pausedRef   = useRef(false);
+  const phaseRef    = useRef("idle");
+  const settingsRef = useRef(settings);
+  const audioCtxRef = useRef(null);
+
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
+
+  const playBeeps = () => {
+    try {
+      if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
+      const ctx = audioCtxRef.current;
+      if (ctx.state === "suspended") ctx.resume();
+      for (let i = 0; i < 3; i++) {
+        const osc  = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.frequency.value = 880;
+        gain.gain.setValueAtTime(0.3, ctx.currentTime + i * 0.2);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.2 + 0.12);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(ctx.currentTime + i * 0.2);
+        osc.stop(ctx.currentTime + i * 0.2 + 0.13);
+      }
+    } catch {}
+  };
+
+  // Single long-lived interval; reads live values from refs.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (pausedRef.current || phaseRef.current === "idle") return;
+      const rem = Math.max(0, (endsAtRef.current - Date.now()) / 1000);
+      if (rem <= 0) {
+        playBeeps();
+        const np = nextPhase(phaseRef.current);
+        phaseRef.current = np;
+        endsAtRef.current = Date.now() + pomodoroMinutes(settingsRef.current, np) * 60 * 1000;
+        setPhase(np);
+        setRemaining(pomodoroMinutes(settingsRef.current, np) * 60);
+      } else {
+        setRemaining(rem);
+      }
+    }, 500);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    return () => { audioCtxRef.current?.close(); };
+  }, []);
+
+  const start = () => {
+    const mins = pomodoroMinutes(settingsRef.current, "work");
+    phaseRef.current = "work";
+    endsAtRef.current = Date.now() + mins * 60 * 1000;
+    pausedRef.current = false;
+    setPhase("work");
+    setRemaining(mins * 60);
+    setPaused(false);
+  };
+
+  const pause = () => {
+    const rem = Math.max(0, (endsAtRef.current - Date.now()) / 1000);
+    endsAtRef.current = null;
+    pausedRef.current = true;
+    setRemaining(rem);
+    setPaused(true);
+  };
+
+  const resume = () => {
+    endsAtRef.current = Date.now() + remaining * 1000;
+    pausedRef.current = false;
+    setPaused(false);
+  };
+
+  const reset = () => {
+    phaseRef.current = "idle";
+    endsAtRef.current = null;
+    pausedRef.current = false;
+    setPhase("idle");
+    setRemaining(0);
+    setPaused(false);
+  };
+
+  return { phase, remaining, paused, start, pause, resume, reset };
+}
+
 // ── Page shell ────────────────────────────────────────────────────────────────
 
 function Page({ children }) {
@@ -321,6 +550,59 @@ function AccountButton({ user, signIn, signOut }) {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 
+// ── Pomodoro chip (used in assess + result views) ─────────────────────────────
+
+function PomodoroChip({ pomo }) {
+  if (pomo.phase === "idle") return null;
+  const color = pomo.phase === "work" ? C.action : C.pass;
+  return (
+    <div style={{ position: "fixed", top: "0.75rem", right: "0.75rem", background: C.paperLt, border: `1px solid ${color}`, borderRadius: "2px", padding: "0.3rem 0.6rem", zIndex: 10, textAlign: "center" }}>
+      <div style={{ fontFamily: F.stamp, fontSize: "0.5rem", textTransform: "uppercase", letterSpacing: "0.12em", color, marginBottom: "0.1rem" }}>{pomo.phase}</div>
+      <div style={{ fontFamily: F.display, fontSize: "1rem", fontWeight: 700, color: C.ink }}>{fmtClock(pomo.remaining)}</div>
+    </div>
+  );
+}
+
+// ── Pomodoro controls (collapsible) ───────────────────────────────────────────
+
+function PomodoroControls({ pomo }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ marginTop: "1rem" }}>
+      <button onClick={() => setOpen((o) => !o)} style={inkBtn({ color: C.inkFaint })}>
+        Pomodoro {open ? "▾" : "▸"}
+      </button>
+      {open && (
+        <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: `1px dashed ${C.rule}` }}>
+          <div style={{ marginBottom: "0.5rem" }}>
+            {pomo.phase === "idle" ? (
+              <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, letterSpacing: "0.08em" }}>idle</span>
+            ) : (
+              <span style={{ fontFamily: F.display, fontSize: "1rem", fontWeight: 700, color: pomo.phase === "work" ? C.action : C.pass }}>
+                {pomo.phase} · {fmtClock(pomo.remaining)}
+              </span>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
+            {pomo.phase === "idle" && (
+              <button onClick={pomo.start} style={inkBtn({ color: C.action })}>Start work</button>
+            )}
+            {pomo.phase !== "idle" && !pomo.paused && (
+              <button onClick={pomo.pause} style={inkBtn({ color: C.inkMid })}>Pause</button>
+            )}
+            {pomo.phase !== "idle" && pomo.paused && (
+              <button onClick={pomo.resume} style={inkBtn({ color: C.action })}>Resume</button>
+            )}
+            {pomo.phase !== "idle" && (
+              <button onClick={pomo.reset} style={inkBtn({ color: C.inkFaint })}>Reset</button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   useFonts();
   const { user, signIn, signOut } = useAuth();
@@ -329,6 +611,7 @@ export default function App() {
   const [cards,         setCards]         = useState(() => syncCards(load(KEYS.items, DEFAULT_EXCERPTS), load(KEYS.cards, [])));
   const [context,       setContext]       = useState(() => load(KEYS.context, ""));
   const [settings,      setSettings]      = useState(() => load(KEYS.settings, DEFAULT_SETTINGS));
+  const pomo = usePomodoro(settings);
   const [sessions,      setSessions]      = useState(() => load(KEYS.sessions, []));
   const [badges,        setBadges]        = useState(() => load(KEYS.badges, {}));
   const [toast,         setToast]         = useState(null);
@@ -763,6 +1046,35 @@ export default function App() {
           Restore default rubric
         </button>
       </div>
+
+      <Rule thick />
+
+      <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.15em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.3rem" }}>Pomodoro timer</p>
+      <p style={{ fontStyle: "italic", fontSize: "0.95rem", color: C.inkMid, marginBottom: "0.75rem" }}>Work and break lengths in minutes.</p>
+
+      {[
+        { key: "work",  label: "Work"  },
+        { key: "break", label: "Break" },
+      ].map(({ key, label }, i) => (
+        <div key={key}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.65rem 0" }}>
+            <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint }}>{label}</span>
+            <div style={{ display: "flex", alignItems: "baseline", gap: "0.5rem" }}>
+              <input
+                type="number" min={1} max={120}
+                value={pomodoroMinutes(settings, key)}
+                onChange={(e) => {
+                  const v = Math.max(1, Math.min(120, parseInt(e.target.value, 10) || 1));
+                  setSettings((s) => ({ ...s, pomodoro: { ...(s.pomodoro ?? {}), [key]: v } }));
+                }}
+                style={{ fontFamily: F.display, fontSize: "1.1rem", color: C.ink, background: "transparent", border: "none", borderBottom: `1px solid ${C.rule}`, outline: "none", width: "3rem", textAlign: "center", padding: "2px 0" }}
+              />
+              <span style={{ fontFamily: F.stamp, fontSize: "0.58rem", color: C.inkFaint, letterSpacing: "0.05em" }}>min</span>
+            </div>
+          </div>
+          {i === 0 && <div style={{ borderTop: `1px solid ${C.rule}` }} />}
+        </div>
+      ))}
     </Page>
   );
 
@@ -984,6 +1296,7 @@ export default function App() {
 
   if (view === "assess" && item) return (
     <Page>
+      <PomodoroChip pomo={pomo} />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "1.25rem" }}>
         <button onClick={() => setView("dash")} style={{ background: "none", border: "none", cursor: "pointer", fontFamily: F.body, fontStyle: "italic", fontSize: "0.95rem", color: C.inkFaint, padding: 0 }}>← Journal</button>
         <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, letterSpacing: "0.08em" }}>{idx + 1} of {queue.length}</span>
@@ -1031,6 +1344,8 @@ export default function App() {
         {allRated ? "Record assessment" : `Mark all criteria · ${Object.values(scores).filter((v) => v !== undefined).length} / ${criteria.length}`}
       </button>
 
+      <PomodoroControls pomo={pomo} />
+      <Metronome />
       <Recorder itemId={item.id} />
     </Page>
   );
@@ -1043,6 +1358,7 @@ export default function App() {
     const demoted  = BUCKET[oldBucket].dn === newBucket;
     return (
       <Page>
+        <PomodoroChip pomo={pomo} />
         <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.14em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "1rem" }}>Assessment</p>
         <Rule thick />
         <p style={{ fontFamily: F.stamp, fontSize: "0.65rem", letterSpacing: "0.1em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.3rem" }}>{item.composer}</p>

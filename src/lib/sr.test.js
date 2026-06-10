@@ -5,6 +5,7 @@ import {
   parseTags, itemTags, isCardPinned, cardMatchesTag, sessionPool, buildQueue,
   dayKey, streakDays, weeklyStats,
   computeBadges, bucketTransitions, scoreColor,
+  pomodoroMinutes, nextPhase, fmtClock, tapBpm,
 } from './sr.js'
 
 describe('isDue', () => {
@@ -619,6 +620,102 @@ describe('bucketTransitions', () => {
       { date: '2025-01-04', bucket: 'warm' },
     ]
     expect(bucketTransitions(history)).toEqual(['hot', 'warm', 'cold', 'warm'])
+  })
+})
+
+// ── pomodoroMinutes ───────────────────────────────────────────────────────────
+
+describe('pomodoroMinutes', () => {
+  it('returns 25 for work with no settings', () => {
+    expect(pomodoroMinutes(undefined, 'work')).toBe(25)
+  })
+  it('returns 5 for break with no settings', () => {
+    expect(pomodoroMinutes(undefined, 'break')).toBe(5)
+  })
+  it('returns 25/5 from DEFAULT_SETTINGS', () => {
+    expect(pomodoroMinutes(DEFAULT_SETTINGS, 'work')).toBe(25)
+    expect(pomodoroMinutes(DEFAULT_SETTINGS, 'break')).toBe(5)
+  })
+  it('honors user override', () => {
+    const s = { pomodoro: { work: 45, break: 10 } }
+    expect(pomodoroMinutes(s, 'work')).toBe(45)
+    expect(pomodoroMinutes(s, 'break')).toBe(10)
+  })
+  it('clamps to 120 max', () => {
+    expect(pomodoroMinutes({ pomodoro: { work: 200 } }, 'work')).toBe(120)
+    expect(pomodoroMinutes({ pomodoro: { break: 999 } }, 'break')).toBe(120)
+  })
+  it('falls back on invalid/below-floor values', () => {
+    expect(pomodoroMinutes({ pomodoro: { work: 0 } }, 'work')).toBe(25)
+    expect(pomodoroMinutes({ pomodoro: { work: -1 } }, 'work')).toBe(25)
+    expect(pomodoroMinutes({ pomodoro: { work: 'abc' } }, 'work')).toBe(25)
+    expect(pomodoroMinutes({ pomodoro: { break: 0 } }, 'break')).toBe(5)
+  })
+})
+
+// ── nextPhase ─────────────────────────────────────────────────────────────────
+
+describe('nextPhase', () => {
+  it('work → break', () => {
+    expect(nextPhase('work')).toBe('break')
+  })
+  it('break → work', () => {
+    expect(nextPhase('break')).toBe('work')
+  })
+})
+
+// ── fmtClock ──────────────────────────────────────────────────────────────────
+
+describe('fmtClock', () => {
+  it('formats 0 as 0:00', () => {
+    expect(fmtClock(0)).toBe('0:00')
+  })
+  it('formats 65 as 1:05', () => {
+    expect(fmtClock(65)).toBe('1:05')
+  })
+  it('formats negative as 0:00', () => {
+    expect(fmtClock(-5)).toBe('0:00')
+  })
+  it('formats 1500 as 25:00', () => {
+    expect(fmtClock(1500)).toBe('25:00')
+  })
+})
+
+// ── tapBpm ────────────────────────────────────────────────────────────────────
+
+describe('tapBpm', () => {
+  it('returns null for fewer than 2 taps', () => {
+    expect(tapBpm(null)).toBe(null)
+    expect(tapBpm([])).toBe(null)
+    expect(tapBpm([Date.now()])).toBe(null)
+  })
+  it('computes bpm from evenly spaced taps', () => {
+    // 4 taps 500ms apart → 120 bpm
+    const base = 1000000
+    const taps = [base, base + 500, base + 1000, base + 1500]
+    expect(tapBpm(taps)).toBe(120)
+  })
+  it('uses only the last 4 taps', () => {
+    const base = 1000000
+    // First tap is far back; last 4 are 500ms apart → 120 bpm
+    const taps = [base, base + 10000, base + 10500, base + 11000, base + 11500]
+    expect(tapBpm(taps)).toBe(120)
+  })
+  it('clamps to 30 bpm minimum', () => {
+    // 3s gaps → 20 bpm → clamped to 30
+    const base = 1000000
+    const taps = [base, base + 3000, base + 6000]
+    expect(tapBpm(taps)).toBe(30)
+  })
+  it('clamps to 240 bpm maximum', () => {
+    // 100ms gaps → 600 bpm → clamped to 240
+    const base = 1000000
+    const taps = [base, base + 100, base + 200]
+    expect(tapBpm(taps)).toBe(240)
+  })
+  it('returns null for zero gap', () => {
+    const base = 1000000
+    expect(tapBpm([base, base])).toBe(null)
   })
 })
 
