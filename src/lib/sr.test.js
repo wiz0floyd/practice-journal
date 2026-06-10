@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   isDue, formatDue, draftValid, advanceBucket, bucketSessions,
   syncCards, shuffle, encodeWAV, DEFAULT_SETTINGS, CRITERIA, getCriteria,
+  parseTags, itemTags, isCardPinned, cardMatchesTag, sessionPool, buildQueue,
 } from './sr.js'
 
 describe('isDue', () => {
@@ -206,6 +207,126 @@ describe('getCriteria', () => {
   it('caps at 6 entries', () => {
     const custom = Array.from({ length: 8 }, (_, i) => ({ id: `c${i}`, label: `Criterion ${i}` }))
     expect(getCriteria({ criteria: custom })).toHaveLength(6)
+  })
+})
+
+describe('parseTags', () => {
+  it('splits and trims comma-separated tags', () => {
+    expect(parseTags('audition, etudes, scales')).toEqual(['audition', 'etudes', 'scales'])
+  })
+  it('deduplicates tags', () => {
+    expect(parseTags('a, a, b')).toEqual(['a', 'b'])
+  })
+  it('drops empty entries', () => {
+    expect(parseTags('a,,  ,b')).toEqual(['a', 'b'])
+  })
+  it('handles undefined input', () => {
+    expect(parseTags(undefined)).toEqual([])
+  })
+  it('returns empty array for empty string', () => {
+    expect(parseTags('')).toEqual([])
+  })
+})
+
+describe('itemTags', () => {
+  it('returns the tags array when present', () => {
+    expect(itemTags({ tags: ['a', 'b'] })).toEqual(['a', 'b'])
+  })
+  it('returns [] when tags is missing', () => {
+    expect(itemTags({ composer: 'Bach' })).toEqual([])
+  })
+  it('returns [] when item is undefined', () => {
+    expect(itemTags(undefined)).toEqual([])
+  })
+  it('returns [] when tags is not an array', () => {
+    expect(itemTags({ tags: 'a,b' })).toEqual([])
+  })
+})
+
+describe('isCardPinned', () => {
+  const items = [{ id: 'a', pinned: true }, { id: 'b', pinned: false }, { id: 'c' }]
+
+  it('returns true for a pinned item', () => {
+    expect(isCardPinned({ id: 'a' }, items)).toBe(true)
+  })
+  it('returns false for an unpinned item', () => {
+    expect(isCardPinned({ id: 'b' }, items)).toBe(false)
+  })
+  it('returns false when pinned field is absent', () => {
+    expect(isCardPinned({ id: 'c' }, items)).toBe(false)
+  })
+  it('returns false when card id not found in items', () => {
+    expect(isCardPinned({ id: 'z' }, items)).toBe(false)
+  })
+})
+
+describe('cardMatchesTag', () => {
+  const items = [{ id: 'a', tags: ['audition', 'etudes'] }, { id: 'b', tags: ['scales'] }]
+
+  it('returns true when tag is null (no filter)', () => {
+    expect(cardMatchesTag({ id: 'a' }, items, null)).toBe(true)
+  })
+  it('returns true when tag matches item tags', () => {
+    expect(cardMatchesTag({ id: 'a' }, items, 'audition')).toBe(true)
+  })
+  it('returns false when tag does not match', () => {
+    expect(cardMatchesTag({ id: 'a' }, items, 'scales')).toBe(false)
+  })
+  it('returns false when item has no tags', () => {
+    expect(cardMatchesTag({ id: 'b' }, items, 'audition')).toBe(false)
+  })
+})
+
+describe('sessionPool', () => {
+  const mkItem = (id, tags = [], pinned = false) => ({ id, tags, pinned })
+  const mkCard = (id, due = true) => ({ id, sessionsUntilDue: due ? 0 : 2 })
+
+  it('includes due unpinned cards', () => {
+    const items = [mkItem('a')]
+    const cards = [mkCard('a', true)]
+    expect(sessionPool(cards, items, null)).toHaveLength(1)
+  })
+  it('includes pinned-but-not-due cards', () => {
+    const items = [mkItem('a', [], true)]
+    const cards = [mkCard('a', false)]
+    expect(sessionPool(cards, items, null)).toHaveLength(1)
+  })
+  it('excludes non-due non-pinned cards', () => {
+    const items = [mkItem('a')]
+    const cards = [mkCard('a', false)]
+    expect(sessionPool(cards, items, null)).toHaveLength(0)
+  })
+  it('excludes cards that do not match the tag filter', () => {
+    const items = [mkItem('a', ['etudes']), mkItem('b', ['scales'])]
+    const cards = [mkCard('a', true), mkCard('b', true)]
+    const pool = sessionPool(cards, items, 'etudes')
+    expect(pool).toHaveLength(1)
+    expect(pool[0].id).toBe('a')
+  })
+})
+
+describe('buildQueue', () => {
+  const mkItem = (id, pinned = false) => ({ id, tags: [], pinned })
+  const mkCard = (id, due = true) => ({ id, sessionsUntilDue: due ? 0 : 2 })
+
+  it('includes all pinned cards even when length is smaller', () => {
+    const items = [mkItem('a', true), mkItem('b', true), mkItem('c', true)]
+    const cards = [mkCard('a', true), mkCard('b', true), mkCard('c', true)]
+    const q = buildQueue(cards, items, null, 1)
+    expect(q).toHaveLength(3)
+  })
+  it('respects length limit for unpinned cards', () => {
+    const items = [mkItem('a'), mkItem('b'), mkItem('c')]
+    const cards = [mkCard('a', true), mkCard('b', true), mkCard('c', true)]
+    const q = buildQueue(cards, items, null, 2)
+    expect(q).toHaveLength(2)
+  })
+  it('only returns cards from the session pool', () => {
+    const items = [mkItem('a'), mkItem('b')]
+    const cards = [mkCard('a', true), mkCard('b', false)]
+    const q = buildQueue(cards, items, null, 5)
+    expect(q.map((c) => c.id)).toContain('a')
+    expect(q.map((c) => c.id)).not.toContain('b')
   })
 })
 

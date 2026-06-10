@@ -42,8 +42,20 @@ export const CRITERIA = [
 export const newId      = () => `item_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 export const isDue      = (c) => (c.sessionsUntilDue ?? 0) === 0;
 export const formatDue  = (n) => !n || n <= 0 ? "due now" : n === 1 ? "next session" : `in ${n} sessions`;
-export const emptyDraft = () => ({ composer: "", title: "", detail: "" });
+export const emptyDraft = () => ({ composer: "", title: "", detail: "", notes: "", tags: "" });
 export const draftValid = (d) => d.composer.trim() && d.title.trim();
+
+export const itemTags      = (item) => Array.isArray(item?.tags) ? item.tags : [];
+export const parseTags     = (s) => [...new Set(String(s ?? "").split(",").map((t) => t.trim()).filter(Boolean))];
+export const isCardPinned  = (card, items) => !!items.find((i) => i.id === card.id)?.pinned;
+export const cardMatchesTag = (card, items, tag) => !tag || itemTags(items.find((i) => i.id === card.id)).includes(tag);
+export const sessionPool   = (cards, items, tag) => cards.filter((c) => cardMatchesTag(c, items, tag)).filter((c) => isDue(c) || isCardPinned(c, items));
+export const buildQueue    = (cards, items, tag, length) => {
+  const pool   = sessionPool(cards, items, tag);
+  const pinned = pool.filter((c) => isCardPinned(c, items));
+  const rest   = pool.filter((c) => !isCardPinned(c, items));
+  return [...shuffle(pinned), ...shuffle(rest)].slice(0, Math.max(length, pinned.length));
+};
 
 export const shuffle = (arr) => {
   const a = [...arr];
