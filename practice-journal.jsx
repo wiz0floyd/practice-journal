@@ -7,6 +7,7 @@ import {
   weeklyStats, streakDays, BADGES, computeBadges, bucketTransitions, scoreColor,
   pomodoroMinutes, nextPhase, fmtClock, tapBpm,
   buildExport, validImport, restoreQueue,
+  freqToNote, autoCorrelate,
 } from "./src/lib/sr.js";
 import { supabase } from "./src/lib/supabase.js";
 import { stampAndUpsert, pullUserData } from "./src/lib/sync.js";
@@ -209,6 +210,226 @@ function Recorder({ itemId }) {
               <a href={r.url} download={`take_${itemId}_${r.ts.replace(/:/g, "")}.wav`} style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkMid, textDecoration: "none", border: `1px solid ${C.rule}`, padding: "2px 5px", borderRadius: "1px", flexShrink: 0 }}>↓ wav</a>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Tuner ─────────────────────────────────────────────────────────────────────
+
+function Tuner() {
+  const [open,    setOpen]    = useState(false);
+  const [running, setRunning] = useState(false);
+  const [mode,    setMode]    = useState("chromatic");
+  const [reading, setReading] = useState(null);
+  const [err,     setErr]     = useState("");
+
+  const ctxRef      = useRef(null);
+  const analyserRef = useRef(null);
+  const streamRef   = useRef(null);
+  const rafRef      = useRef(null);
+  const bufRef      = useRef(null);
+  const discRef     = useRef(null);
+  const angleRef    = useRef(0);
+  const lastSetRef  = useRef(0);
+  const lastValidRef = useRef(0);
+
+  const stop = () => {
+    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+    if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
+    if (ctxRef.current) { ctxRef.current.close(); ctxRef.current = null; }
+    analyserRef.current = null;
+    setRunning(false);
+  };
+
+  useEffect(() => () => stop(), []); // cleanup on unmount
+
+  const start = async () => {
+    setErr("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      });
+      streamRef.current = stream;
+      const ctx = new AudioContext();
+      ctxRef.current = ctx;
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      analyserRef.current = analyser;
+      ctx.createMediaStreamSource(stream).connect(analyser);
+      bufRef.current = new Float32Array(2048);
+      setRunning(true);
+
+      const loop = () => {
+        analyserRef.current.getFloatTimeDomainData(bufRef.current);
+        const f = autoCorrelate(bufRef.current, ctxRef.current.sampleRate);
+        const now = performance.now();
+        if (f > 0) {
+          lastValidRef.current = now;
+          const n = freqToNote(f);
+          if (discRef.current) {
+            if (Math.abs(n.cents) >= 2) {
+              angleRef.current += Math.max(-6, Math.min(6, n.cents * 0.12));
+            }
+            discRef.current.style.transform = `rotate(${angleRef.current}deg)`;
+          }
+          if (now - lastSetRef.current > 100) {
+            setReading({ ...n, freq: Math.round(f * 10) / 10 });
+            lastSetRef.current = now;
+          }
+        } else {
+          if (discRef.current) {
+            discRef.current.style.transform = `rotate(${angleRef.current}deg)`;
+          }
+          if (now - lastValidRef.current > 300 && now - lastSetRef.current > 100) {
+            setReading(null);
+            lastSetRef.current = now;
+          }
+        }
+        rafRef.current = requestAnimationFrame(loop);
+      };
+      rafRef.current = requestAnimationFrame(loop);
+    } catch (e) {
+      setErr(e.message);
+    }
+  };
+
+  const handleToggleOpen = () => {
+    setOpen((o) => {
+      if (o) stop();
+      return !o;
+    });
+  };
+
+  const cents = reading?.cents ?? 0;
+  const clampedCents = Math.max(-50, Math.min(50, cents));
+
+  return (
+    <div style={{ marginTop: "1rem" }}>
+      <button onClick={handleToggleOpen} style={inkBtn({ color: C.inkFaint })}>
+        Tuner {open ? "▾" : "▸"}
+      </button>
+      {open && (
+        <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: `1px dashed ${C.rule}` }}>
+          {/* Mode toggle + start/stop row */}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.75rem", flexWrap: "wrap" }}>
+            <span>
+              <button
+                onClick={() => setMode("chromatic")}
+                style={inkBtn({ color: mode === "chromatic" ? C.action : C.inkFaint })}
+              >
+                chromatic
+              </button>
+              {" · "}
+              <button
+                onClick={() => setMode("strobe")}
+                style={inkBtn({ color: mode === "strobe" ? C.action : C.inkFaint })}
+              >
+                strobe
+              </button>
+            </span>
+            <button
+              onClick={running ? stop : start}
+              style={{
+                fontFamily: F.body,
+                fontStyle: "italic",
+                fontSize: "0.9rem",
+                padding: "2px 10px",
+                background: "transparent",
+                border: `1px solid ${running ? C.fail : C.rule}`,
+                color: running ? C.fail : C.inkMid,
+                borderRadius: "1px",
+                cursor: "pointer",
+              }}
+            >
+              {running ? "Stop" : "Start"}
+            </button>
+          </div>
+
+          {err && (
+            <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.fail, marginBottom: "0.5rem" }}>{err}</p>
+          )}
+
+          {/* Chromatic display */}
+          {mode === "chromatic" && (
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontFamily: F.display, fontSize: "2.2rem", fontWeight: 700, color: C.ink, lineHeight: 1.1 }}>
+                {reading ? `${reading.name}${reading.octave}` : "—"}
+              </div>
+              {/* Cents bar */}
+              <div style={{ position: "relative", height: "6px", background: C.rule, borderRadius: "1px", marginTop: "0.6rem" }}>
+                {/* Center tick */}
+                <div style={{ position: "absolute", left: "50%", width: "1px", height: "12px", top: "-3px", background: C.inkMid }} />
+                {/* Needle */}
+                <div style={{
+                  position: "absolute",
+                  width: "3px",
+                  height: "12px",
+                  top: "-3px",
+                  borderRadius: "1px",
+                  left: `calc(${50 + clampedCents}% - 1.5px)`,
+                  background: reading && Math.abs(cents) <= 5 ? C.pass : C.fail,
+                }} />
+              </div>
+              <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", color: C.inkFaint, letterSpacing: "0.08em", marginTop: "0.5rem" }}>
+                {reading
+                  ? `${cents > 0 ? "+" : ""}${cents} cents · ${reading.freq} Hz`
+                  : running ? "listening…" : "—"}
+              </p>
+            </div>
+          )}
+
+          {/* Strobe display */}
+          {mode === "strobe" && (
+            <div style={{ textAlign: "center" }}>
+              <div style={{ position: "relative", width: "140px", height: "140px", margin: "0.75rem auto" }}>
+                {/* Strobe disc */}
+                <div
+                  ref={discRef}
+                  style={{
+                    width: "140px",
+                    height: "140px",
+                    borderRadius: "50%",
+                    border: `1px solid ${C.ruleDk}`,
+                    background: `repeating-conic-gradient(${C.ink} 0deg 15deg, transparent 15deg 30deg)`,
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                  }}
+                />
+                {/* Inner hole overlay */}
+                <div style={{
+                  position: "absolute",
+                  top: "50%",
+                  left: "50%",
+                  transform: "translate(-50%, -50%)",
+                  width: "64px",
+                  height: "64px",
+                  borderRadius: "50%",
+                  background: C.paper,
+                  border: `1px solid ${C.rule}`,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}>
+                  <span style={{
+                    fontFamily: F.display,
+                    fontSize: "1.3rem",
+                    fontWeight: 700,
+                    color: reading && Math.abs(cents) <= 5 ? C.pass : C.ink,
+                  }}>
+                    {reading ? `${reading.name}${reading.octave}` : "—"}
+                  </span>
+                </div>
+              </div>
+              <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", color: C.inkFaint, letterSpacing: "0.08em", marginTop: "0.25rem" }}>
+                {reading
+                  ? `${cents > 0 ? "+" : ""}${cents} cents · ${reading.freq} Hz`
+                  : running ? "listening…" : "—"}
+              </p>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1461,6 +1682,7 @@ export default function App() {
       </button>
 
       <PomodoroControls pomo={pomo} />
+      <Tuner />
       <Metronome />
       <Recorder itemId={item.id} />
     </Page>

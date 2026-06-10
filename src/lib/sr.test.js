@@ -7,6 +7,7 @@ import {
   computeBadges, bucketTransitions, scoreColor,
   pomodoroMinutes, nextPhase, fmtClock, tapBpm,
   buildExport, validImport, restoreQueue, KEYS,
+  freqToNote, autoCorrelate,
 } from './sr.js'
 
 describe('isDue', () => {
@@ -847,5 +848,76 @@ describe('scoreColor', () => {
     expect(scoreColor(4, 0)).toBe('pass')
     // ups=1, total=0 → fallback 4 → 1/4 = 0.25 → fail
     expect(scoreColor(1, 0)).toBe('fail')
+  })
+})
+
+// ── freqToNote ────────────────────────────────────────────────────────────────
+
+describe('freqToNote', () => {
+  it('maps 440 Hz to A4, 0 cents', () => {
+    expect(freqToNote(440)).toEqual({ name: 'A', octave: 4, cents: 0 })
+  })
+
+  it('maps 261.63 Hz to C4 with cents near 0', () => {
+    const result = freqToNote(261.63)
+    expect(result.name).toBe('C')
+    expect(result.octave).toBe(4)
+    expect(Math.abs(result.cents)).toBeLessThanOrEqual(1)
+  })
+
+  it('maps 446 Hz to A4 with cents between +20 and +28', () => {
+    const result = freqToNote(446)
+    expect(result.name).toBe('A')
+    expect(result.octave).toBe(4)
+    expect(result.cents).toBeGreaterThanOrEqual(20)
+    expect(result.cents).toBeLessThanOrEqual(28)
+  })
+
+  it('returns null for 0', () => {
+    expect(freqToNote(0)).toBeNull()
+  })
+
+  it('returns null for negative frequency', () => {
+    expect(freqToNote(-5)).toBeNull()
+  })
+
+  it('returns null for NaN', () => {
+    expect(freqToNote(NaN)).toBeNull()
+  })
+
+  it('shifts result when alternate a4=442 is used', () => {
+    const at440 = freqToNote(440, 440)
+    const at442 = freqToNote(440, 442)
+    expect(at440.cents).toBe(0)
+    // 440 Hz is flat relative to a4=442 reference
+    expect(at442.cents).toBeLessThan(0)
+  })
+})
+
+// ── autoCorrelate ─────────────────────────────────────────────────────────────
+
+describe('autoCorrelate', () => {
+  it('detects a 440 Hz sine within 1 Hz at 44100 sample rate', () => {
+    const buf = Float32Array.from({ length: 2048 }, (_, i) => Math.sin(2 * Math.PI * 440 * i / 44100))
+    const freq = autoCorrelate(buf, 44100)
+    expect(freq).toBeGreaterThan(0)
+    expect(Math.abs(freq - 440)).toBeLessThanOrEqual(1)
+  })
+
+  it('detects an 880 Hz sine within 2 Hz at 44100 sample rate', () => {
+    const buf = Float32Array.from({ length: 2048 }, (_, i) => Math.sin(2 * Math.PI * 880 * i / 44100))
+    const freq = autoCorrelate(buf, 44100)
+    expect(freq).toBeGreaterThan(0)
+    expect(Math.abs(freq - 880)).toBeLessThanOrEqual(2)
+  })
+
+  it('returns -1 for all-zeros (silence)', () => {
+    const buf = new Float32Array(2048)
+    expect(autoCorrelate(buf, 44100)).toBe(-1)
+  })
+
+  it('returns -1 for low-amplitude noise (amplitude 0.001)', () => {
+    const buf = Float32Array.from({ length: 2048 }, () => (Math.random() * 2 - 1) * 0.001)
+    expect(autoCorrelate(buf, 44100)).toBe(-1)
   })
 })
