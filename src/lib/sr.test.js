@@ -1,13 +1,14 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   isDue, formatDue, draftValid, advanceBucket, bucketSessions,
-  syncCards, shuffle, encodeWAV, DEFAULT_SETTINGS, CRITERIA, getCriteria,
+  syncCards, shuffle, DEFAULT_SETTINGS, CRITERIA, getCriteria,
   parseTags, itemTags, isCardPinned, cardMatchesTag, sessionPool, buildQueue,
   dayKey, streakDays, weeklyStats,
   computeBadges, bucketTransitions, scoreColor,
   pomodoroMinutes, nextPhase, fmtClock, tapBpm,
   buildExport, validImport, restoreQueue, KEYS,
   freqToNote, autoCorrelate,
+  recordingLimit, keepNewest, fmtBytes,
 } from './sr.js'
 
 describe('isDue', () => {
@@ -162,23 +163,72 @@ describe('shuffle', () => {
   })
 })
 
-describe('encodeWAV', () => {
-  const chunk = (vals) => new Float32Array(vals)
+describe('recordingLimit', () => {
+  it('returns 5 by default when settings is undefined', () => {
+    expect(recordingLimit(undefined)).toBe(5)
+  })
+  it('returns 5 when recordingLimit is absent', () => {
+    expect(recordingLimit({})).toBe(5)
+  })
+  it('honors a valid override', () => {
+    expect(recordingLimit({ recordingLimit: 8 })).toBe(8)
+  })
+  it('clamps to 20 maximum', () => {
+    expect(recordingLimit({ recordingLimit: 99 })).toBe(20)
+  })
+  it('floors to 1 minimum', () => {
+    expect(recordingLimit({ recordingLimit: 0 })).toBe(5)
+    expect(recordingLimit({ recordingLimit: -3 })).toBe(5)
+  })
+  it('falls back to 5 on invalid (non-numeric) values', () => {
+    expect(recordingLimit({ recordingLimit: 'abc' })).toBe(5)
+    expect(recordingLimit({ recordingLimit: NaN })).toBe(5)
+  })
+})
 
-  it('returns a Blob with audio/wav type', () => {
-    const blob = encodeWAV([chunk([0, 0.5])], [chunk([0, -0.5])], 48000)
-    expect(blob).toBeInstanceOf(Blob)
-    expect(blob.type).toBe('audio/wav')
+describe('keepNewest', () => {
+  const rec = (id, date) => ({ id, date })
+
+  it('sorts descending by date and slices to limit', () => {
+    const recs = [
+      rec('a', '2025-01-01T00:00:00Z'),
+      rec('b', '2025-01-03T00:00:00Z'),
+      rec('c', '2025-01-02T00:00:00Z'),
+    ]
+    const result = keepNewest(recs, 2)
+    expect(result.map((r) => r.id)).toEqual(['b', 'c'])
   })
 
-  it('has correct byte length: 44-byte header + n*2*2 PCM bytes', () => {
-    const n = 4
-    const blob = encodeWAV([chunk(new Array(n).fill(0))], [chunk(new Array(n).fill(0))], 48000)
-    expect(blob.size).toBe(44 + n * 2 * 2)
+  it('handles undefined input gracefully', () => {
+    expect(keepNewest(undefined, 3)).toEqual([])
   })
 
-  it('clamps float values to [-1, 1] without throwing', () => {
-    expect(() => encodeWAV([chunk([2.0, -3.0])], [chunk([1.5, -1.5])], 44100)).not.toThrow()
+  it('limit 0 returns empty array', () => {
+    const recs = [rec('a', '2025-01-01T00:00:00Z')]
+    expect(keepNewest(recs, 0)).toEqual([])
+  })
+
+  it('returns all when count <= limit', () => {
+    const recs = [rec('a', '2025-01-02T00:00:00Z'), rec('b', '2025-01-01T00:00:00Z')]
+    expect(keepNewest(recs, 5)).toHaveLength(2)
+  })
+})
+
+describe('fmtBytes', () => {
+  it('returns "0 MB" for 0', () => {
+    expect(fmtBytes(0)).toBe('0 MB')
+  })
+  it('returns "0 MB" for negative values', () => {
+    expect(fmtBytes(-100)).toBe('0 MB')
+  })
+  it('returns "0 MB" for NaN', () => {
+    expect(fmtBytes(NaN)).toBe('0 MB')
+  })
+  it('formats 5 MB correctly', () => {
+    expect(fmtBytes(5 * 1024 * 1024)).toBe('5.0 MB')
+  })
+  it('formats values >= 1 GB in GB', () => {
+    expect(fmtBytes(1.5 * 1024 * 1024 * 1024)).toBe('1.5 GB')
   })
 })
 
