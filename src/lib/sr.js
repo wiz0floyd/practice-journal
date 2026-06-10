@@ -28,9 +28,10 @@ export const BUCKET = {
 };
 
 export const DEFAULT_SETTINGS = {
-  intervals:      { hot: 1, warm: 2, cold: 3 },
-  pomodoro:       { work: 25, break: 5 },
-  recordingLimit: 5,
+  intervals:        { hot: 1, warm: 2, cold: 3 },
+  pomodoro:         { work: 25, break: 5 },
+  recordingLimit:   5,
+  recordingStorage: "local",
 };
 
 /** Sessions between reviews for a bucket, honoring user settings (clamped 1–9). */
@@ -156,6 +157,12 @@ export const recordingLimit = (settings) => {
   const n = Number(settings?.recordingLimit);
   return Number.isFinite(n) && n >= 1 ? Math.min(Math.round(n), 20) : 5;
 };
+
+export const recordingStorageMode = (settings) =>
+  (settings?.recordingStorage === "cloud" ? "cloud" : "local");
+
+export const recordingPath = (userId, itemId, recId) =>
+  `${userId}/${itemId}/${recId}.webm`;
 
 export const keepNewest = (recs, limit) =>
   [...(recs ?? [])].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, Math.max(0, limit));
