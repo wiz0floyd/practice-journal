@@ -10,6 +10,7 @@ import {
   freqToNote, autoCorrelate,
   recordingLimit, keepNewest, fmtBytes,
   validAttachment,
+  recordingStorageMode, recordingPath,
 } from './sr.js'
 
 describe('isDue', () => {
@@ -895,6 +896,37 @@ describe('validAttachment', () => {
   })
   it('rejects size over 15 MB (15 * 1024 * 1024 + 1)', () => {
     expect(validAttachment({ type: 'application/pdf', size: MB15 + 1 })).toBe(false)
+  })
+})
+
+// ── recordingStorageMode ──────────────────────────────────────────────────────
+
+describe('recordingStorageMode', () => {
+  it('returns "cloud" when recordingStorage is "cloud"', () => {
+    expect(recordingStorageMode({ recordingStorage: 'cloud' })).toBe('cloud')
+  })
+  it('returns "local" when recordingStorage is "local"', () => {
+    expect(recordingStorageMode({ recordingStorage: 'local' })).toBe('local')
+  })
+  it('returns "local" when recordingStorage is undefined', () => {
+    expect(recordingStorageMode({})).toBe('local')
+  })
+  it('returns "local" when settings is undefined', () => {
+    expect(recordingStorageMode(undefined)).toBe('local')
+  })
+  it('returns "local" for garbage value', () => {
+    expect(recordingStorageMode({ recordingStorage: 'foobar' })).toBe('local')
+  })
+})
+
+// ── recordingPath ─────────────────────────────────────────────────────────────
+
+describe('recordingPath', () => {
+  it('joins userId/itemId/recId with .webm suffix', () => {
+    expect(recordingPath('user123', 'item_abc', 'rec_xyz')).toBe('user123/item_abc/rec_xyz.webm')
+  })
+  it('works with arbitrary string ids', () => {
+    expect(recordingPath('u', 'i', 'r')).toBe('u/i/r.webm')
   })
 })
 

@@ -10,8 +10,13 @@ import {
   freqToNote, autoCorrelate,
   recordingLimit, fmtBytes,
   validAttachment,
+  recordingStorageMode,
 } from "./src/lib/sr.js";
 import { listRecordings, saveRecording, deleteRecording, recordingUsage } from "./src/lib/recordings.js";
+import {
+  cloudEnabled, uploadRecording, listCloudRecordings, downloadRecording,
+  pruneCloud, cloudUsage,
+} from "./src/lib/cloudRecordings.js";
 import { getAttachment, saveAttachment, deleteAttachment } from "./src/lib/attachments.js";
 import { supabase } from "./src/lib/supabase.js";
 import {
@@ -223,9 +228,10 @@ function RecordingRows({ itemId, recs, urlFor, removeRec }) {
 
 // ── Recorder ──────────────────────────────────────────────────────────────────
 
-function Recorder({ itemId, limit }) {
-  const [state, setState] = useState("idle");
-  const [err,   setErr]   = useState("");
+function Recorder({ itemId, limit, cloudOn, user }) {
+  const [state,     setState]     = useState("idle");
+  const [err,       setErr]       = useState("");
+  const [uploading, setUploading] = useState(false);
   const { recs, setRecs, urlFor, removeRec } = useRecordings(itemId);
 
   const mediaRecorderRef = useRef(null);
@@ -233,8 +239,12 @@ function Recorder({ itemId, limit }) {
   const chunksRef        = useRef([]);
   const startedAtRef     = useRef(0);
   const limitRef         = useRef(limit);
+  const cloudOnRef       = useRef(cloudOn);
+  const userRef          = useRef(user);
 
-  useEffect(() => { limitRef.current = limit; }, [limit]);
+  useEffect(() => { limitRef.current  = limit; },   [limit]);
+  useEffect(() => { cloudOnRef.current = cloudOn; }, [cloudOn]);
+  useEffect(() => { userRef.current    = user; },    [user]);
 
   // Cleanup on unmount: stop any active recording
   useEffect(() => {
@@ -279,6 +289,13 @@ function Recorder({ itemId, limit }) {
           .then(() => listRecordings(itemId))
           .then(setRecs)
           .catch((e) => setErr(e.message));
+        if (cloudOnRef.current && userRef.current) {
+          setUploading(true);
+          uploadRecording(userRef.current, rec)
+            .then((ok) => ok && pruneCloud(userRef.current, itemId, limitRef.current))
+            .catch(() => {})
+            .finally(() => setUploading(false));
+        }
         streamRef.current?.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
       };
@@ -307,6 +324,12 @@ function Recorder({ itemId, limit }) {
           {state === "recording" ? "Stop recording" : "Record take"}
         </button>
         {err && <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.fail }}>{err}</span>}
+        {uploading && (
+          <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint }}>
+            <span style={{ display: "inline-block", animation: "syncspin 1.2s linear infinite" }}>↻</span>
+            {" uploading"}
+          </span>
+        )}
       </div>
       <RecordingRows itemId={itemId} recs={recs} urlFor={urlFor} removeRec={removeRec} />
     </div>
@@ -315,21 +338,86 @@ function Recorder({ itemId, limit }) {
 
 // ── RecordingList (history view — no capture controls) ────────────────────────
 
-function RecordingList({ itemId }) {
+function RecordingList({ itemId, user }) {
   const { recs, urlFor, removeRec } = useRecordings(itemId);
-  if (!recs.length) return null;
+  const [cloudRecs, setCloudRecs]   = useState([]);
+  const [loadedMap, setLoadedMap]   = useState({});
+  const cloudUrlsRef                = useRef(new Map());
+
+  useEffect(() => {
+    let alive = true;
+    listCloudRecordings(user ?? null, itemId)
+      .then((rs) => { if (alive) setCloudRecs(user ? rs : []); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [user, itemId]);
+
+  // Revoke cloud object URLs on unmount
+  useEffect(() => {
+    const urls = cloudUrlsRef.current;
+    return () => { urls.forEach((u) => URL.revokeObjectURL(u)); };
+  }, []);
+
+  const localIds  = new Set(recs.map((r) => r.id));
+  const cloudOnly = cloudRecs.filter((r) => !localIds.has(r.id));
+
+  const handleLoad = (r) => {
+    if (loadedMap[r.id]) return; // already loading/loaded
+    downloadRecording(r.path)
+      .then((blob) => {
+        if (!blob) return;
+        const url = URL.createObjectURL(blob);
+        cloudUrlsRef.current.set(r.id, url);
+        setLoadedMap((m) => ({ ...m, [r.id]: url }));
+      })
+      .catch(() => {});
+  };
+
+  const hasAny = recs.length > 0 || cloudOnly.length > 0;
+  if (!hasAny) return null;
+
   return (
     <div style={{ marginTop: "0.5rem" }}>
       <RecordingRows itemId={itemId} recs={recs} urlFor={urlFor} removeRec={removeRec} />
+      {cloudOnly.map((r) => (
+        <div key={r.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.4rem" }}>
+          <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, flexShrink: 0 }}>☁</span>
+          <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {r.date ? new Date(r.date).toLocaleDateString() : r.name}
+          </span>
+          <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, flexShrink: 0 }}>{fmtBytes(r.size)}</span>
+          {loadedMap[r.id] ? (
+            <audio src={loadedMap[r.id]} controls style={{ flex: 1, height: "26px", minWidth: 0 }} />
+          ) : (
+            <button
+              onClick={() => handleLoad(r)}
+              style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkMid, background: "transparent", border: `1px solid ${C.rule}`, padding: "2px 5px", borderRadius: "1px", cursor: "pointer", flexShrink: 0 }}
+            >load</button>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
 
 // ── Recordings settings section ───────────────────────────────────────────────
 
-function RecordingsSettings({ settings, setSettings }) {
-  const [usage, setUsage] = useState(null);
+function RecordingsSettings({ settings, setSettings, user }) {
+  const [usage,       setUsage]       = useState(null);
+  const [cloudUsageB, setCloudUsageB] = useState(null);
+  const mode = recordingStorageMode(settings);
+
   useEffect(() => { recordingUsage().then(setUsage).catch(() => {}); }, []);
+
+  useEffect(() => {
+    let alive = true;
+    const fetch = user && mode === "cloud"
+      ? cloudUsage(user)
+      : Promise.resolve(null);
+    fetch.then((n) => { if (alive) setCloudUsageB(n); }).catch(() => {});
+    return () => { alive = false; };
+  }, [user, mode]);
+
   return (
     <>
       <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.15em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.3rem" }}>Recordings</p>
@@ -353,6 +441,32 @@ function RecordingsSettings({ settings, setSettings }) {
         <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", color: C.inkFaint, letterSpacing: "0.08em", marginTop: "0.25rem" }}>
           storage used: {fmtBytes(usage)}
         </p>
+      )}
+      {user && (
+        <div style={{ marginTop: "0.75rem" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.65rem 0" }}>
+            <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint }}>Recording storage</span>
+            <span>
+              <button
+                onClick={() => setSettings((s) => ({ ...s, recordingStorage: "local" }))}
+                style={inkBtn({ color: mode === "local" ? C.action : C.inkFaint })}
+              >Local only</button>
+              {" · "}
+              <button
+                onClick={() => setSettings((s) => ({ ...s, recordingStorage: "cloud" }))}
+                style={inkBtn({ color: mode === "cloud" ? C.action : C.inkFaint })}
+              >Cloud</button>
+            </span>
+          </div>
+          <p style={{ fontStyle: "italic", fontSize: "0.85rem", color: C.inkFaint, marginTop: "0.15rem" }}>
+            Cloud uploads are opt-in; recordings stay on this device by default.
+          </p>
+          {mode === "cloud" && cloudUsageB !== null && (
+            <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", color: C.inkFaint, letterSpacing: "0.08em", marginTop: "0.25rem" }}>
+              cloud storage: {fmtBytes(cloudUsageB)} of 1 GB
+            </p>
+          )}
+        </div>
       )}
     </>
   );
@@ -1768,7 +1882,7 @@ export default function App() {
 
       <Rule thick />
 
-      <RecordingsSettings settings={settings} setSettings={setSettings} />
+      <RecordingsSettings settings={settings} setSettings={setSettings} user={user} />
 
       <Rule thick />
 
@@ -1881,7 +1995,7 @@ export default function App() {
                   <span> · {transitions.map((b) => BUCKET[b].label).join(" → ")}</span>
                 )}
               </p>
-              <RecordingList itemId={it.id} />
+              <RecordingList itemId={it.id} user={user} />
             </div>
             <div style={{ borderTop: `1px solid ${C.rule}` }} />
           </div>
@@ -2107,7 +2221,7 @@ export default function App() {
         <PomodoroControls pomo={pomo} />
         <Tuner />
         <Metronome />
-        <Recorder itemId={item.id} limit={recordingLimit(settings)} />
+        <Recorder itemId={item.id} limit={recordingLimit(settings)} cloudOn={cloudEnabled(settings, user)} user={user} />
       </>
     );
 
