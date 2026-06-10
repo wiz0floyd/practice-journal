@@ -9,8 +9,10 @@ import {
   buildExport, validImport, restoreQueue,
   freqToNote, autoCorrelate,
   recordingLimit, fmtBytes,
+  validAttachment,
 } from "./src/lib/sr.js";
 import { listRecordings, saveRecording, deleteRecording, recordingUsage } from "./src/lib/recordings.js";
+import { getAttachment, saveAttachment, deleteAttachment } from "./src/lib/attachments.js";
 import { supabase } from "./src/lib/supabase.js";
 import { stampAndUpsert, pullUserData } from "./src/lib/sync.js";
 
@@ -800,9 +802,73 @@ function usePomodoro(settings) {
   return { phase, remaining, paused, start, pause, resume, reset };
 }
 
+// ── Media query hook ──────────────────────────────────────────────────────────
+
+function useMediaQuery(q) {
+  const [m, setM] = useState(() => typeof window !== "undefined" && window.matchMedia(q).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(q);
+    const h = (e) => setM(e.matches);
+    mq.addEventListener("change", h);
+    return () => mq.removeEventListener("change", h);
+  }, [q]);
+  return m;
+}
+
+// ── Attachment hook ───────────────────────────────────────────────────────────
+
+function useAttachment(itemId) {
+  const [att, setAtt] = useState(undefined);
+  const [url, setUrl] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    if (!itemId) {
+      Promise.resolve().then(() => { if (alive) { setAtt(undefined); setUrl(null); } });
+      return () => { alive = false; };
+    }
+    getAttachment(itemId).then((rec) => {
+      if (!alive) return;
+      setAtt(rec);
+      if (rec?.blob) {
+        setUrl(URL.createObjectURL(rec.blob));
+      } else {
+        setUrl(null);
+      }
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [itemId]);
+
+  // Revoke URL on unmount
+  useEffect(() => {
+    return () => {
+      setUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+    };
+  }, []);
+
+  const reload = (id) => {
+    const target = id ?? itemId;
+    if (!target) {
+      setAtt(undefined);
+      setUrl(null);
+      return;
+    }
+    getAttachment(target).then((rec) => {
+      setAtt(rec);
+      if (rec?.blob) {
+        setUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(rec.blob); });
+      } else {
+        setUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+      }
+    }).catch(() => {});
+  };
+
+  return { att, url, reload };
+}
+
 // ── Page shell ────────────────────────────────────────────────────────────────
 
-function Page({ children }) {
+function Page({ children, wide }) {
   return (
     <div style={{ minHeight: "100vh", background: C.paper, fontFamily: F.body, color: C.ink }}>
       <style>{`
@@ -818,7 +884,7 @@ function Page({ children }) {
         input[type="range"]::-webkit-slider-runnable-track { background: ${C.ruleDk}; height: 1px; }
         input[type="range"]::-moz-range-track { background: ${C.ruleDk}; height: 1px; }
       `}</style>
-      <div style={{ maxWidth: 420, margin: "0 auto", padding: "2.25rem 1.5rem 3rem" }}>
+      <div style={{ maxWidth: wide ? 960 : 420, margin: "0 auto", padding: "2.25rem 1.5rem 3rem" }}>
         {children}
       </div>
     </div>
@@ -906,6 +972,79 @@ function AccountButton({ user, signIn, signOut }) {
   );
 }
 
+// ── Score (sheet music) field ─────────────────────────────────────────────────
+
+function ScoreField({ itemId }) {
+  const { att, reload } = useAttachment(itemId);
+  const inputRef = useRef(null);
+
+  const handleFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!validAttachment(file)) {
+      window.alert("Use a PDF, PNG, or JPG up to 15 MB.");
+      e.target.value = "";
+      return;
+    }
+    saveAttachment({ itemId, name: file.name, type: file.type, blob: file, date: new Date().toISOString() })
+      .then(() => reload(itemId));
+    e.target.value = "";
+  };
+
+  const handleRemove = () => {
+    deleteAttachment(itemId).then(() => reload(itemId));
+  };
+
+  return (
+    <div style={{ marginBottom: "0.75rem" }}>
+      <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.2rem" }}>Sheet music</p>
+      <input
+        type="file"
+        accept="application/pdf,image/png,image/jpeg"
+        ref={inputRef}
+        style={{ display: "none" }}
+        onChange={handleFile}
+      />
+      {att ? (
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+          <span style={{ fontFamily: F.body, fontStyle: "italic", fontSize: "0.95rem", color: C.inkMid }}>{att.name}</span>
+          <button onClick={() => inputRef.current?.click()} style={inkBtn({ color: C.inkMid })}>replace</button>
+          <button onClick={handleRemove} style={inkBtn({ color: C.fail })}>remove</button>
+        </div>
+      ) : (
+        <button
+          onClick={() => inputRef.current?.click()}
+          style={{ fontFamily: F.body, fontStyle: "italic", fontSize: "0.95rem", padding: "3px 10px", background: "transparent", border: `1px solid ${C.rule}`, color: C.inkFaint, borderRadius: "1px", cursor: "pointer" }}
+        >
+          Attach PDF or image…
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ── Mobile score (sheet music) collapsible ────────────────────────────────────
+
+function MobileScoreSection({ score, scoreUrl }) {
+  const [open, setOpen] = useState(false);
+  if (!score || !scoreUrl) return null;
+  return (
+    <div style={{ marginTop: "1rem" }}>
+      <button onClick={() => setOpen((o) => !o)} style={inkBtn({ color: C.inkFaint })}>
+        Sheet music {open ? "▾" : "▸"}
+      </button>
+      {open && (
+        <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: `1px dashed ${C.rule}` }}>
+          {score.type === "application/pdf"
+            ? <iframe src={scoreUrl} title="Sheet music" style={{ width: "100%", height: "60vh", border: `1px solid ${C.rule}`, borderRadius: "1px", background: C.paperLt }} />
+            : <img src={scoreUrl} alt="Sheet music" style={{ width: "100%", maxHeight: "60vh", objectFit: "contain", border: `1px solid ${C.rule}`, borderRadius: "1px" }} />
+          }
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 
 // ── Pomodoro chip (used in assess + result views) ─────────────────────────────
@@ -964,6 +1103,7 @@ function PomodoroControls({ pomo }) {
 export default function App() {
   useFonts();
   const { user, signIn, signOut } = useAuth();
+  const isDesktop = useMediaQuery("(min-width: 768px)");
 
   const [items,         setItems]         = useState(() => load(KEYS.items,   DEFAULT_EXCERPTS));
   const [cards,         setCards]         = useState(() => syncCards(load(KEYS.items, DEFAULT_EXCERPTS), load(KEYS.cards, [])));
@@ -1080,6 +1220,9 @@ export default function App() {
   const dueCards = sessionPool(cards, items, tagFilter);
   const card     = queue[idx];
   const item     = card ? items.find((e) => e.id === card.id) : null;
+
+  // Unconditional top-level hooks (rules of hooks: no conditionals)
+  const { att: score, url: scoreUrl } = useAttachment(item?.id);
 
   // ── Session ───────────────────────────────────────────────────────────────
 
@@ -1687,6 +1830,7 @@ export default function App() {
                   <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.2rem" }}>Tags</p>
                   <JournalInput value={editDraft.tags} onChange={(v) => setEditDraft((d) => ({ ...d, tags: v }))} placeholder="audition, etudes, … (comma-separated)" />
                 </div>
+                <ScoreField itemId={it.id} />
                 <div style={{ display: "flex", gap: "1rem" }}>
                   <button onClick={saveEdit} disabled={!draftValid(editDraft)} style={inkBtn({ color: draftValid(editDraft) ? C.action : C.inkFaint })}>Save</button>
                   <button onClick={cancelEdit} style={inkBtn({ color: C.inkFaint })}>Cancel</button>
@@ -1772,62 +1916,92 @@ export default function App() {
 
   // ── Assessment ────────────────────────────────────────────────────────────
 
-  if (view === "assess" && item) return (
-    <Page>
-      <PomodoroChip pomo={pomo} />
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "1.25rem" }}>
-        <button onClick={() => { clearActive(); setView("dash"); }} style={{ background: "none", border: "none", cursor: "pointer", fontFamily: F.body, fontStyle: "italic", fontSize: "0.95rem", color: C.inkFaint, padding: 0 }}>← Journal</button>
-        <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, letterSpacing: "0.08em" }}>{idx + 1} of {queue.length}</span>
-      </div>
+  if (view === "assess" && item) {
+    const scoreViewer = score && scoreUrl ? (
+      score.type === "application/pdf"
+        ? <iframe src={scoreUrl} title="Sheet music" style={{ width: "100%", height: "82vh", border: `1px solid ${C.rule}`, borderRadius: "1px", background: C.paperLt }} />
+        : <img src={scoreUrl} alt="Sheet music" style={{ width: "100%", border: `1px solid ${C.rule}`, borderRadius: "1px" }} />
+    ) : null;
 
-      <div style={{ display: "flex", gap: "4px", marginBottom: "1.5rem" }}>
-        {queue.map((_, i) => <div key={i} style={{ height: 2, flex: 1, borderRadius: 1, background: i < idx ? C.inkMid : i === idx ? C.action : C.rule }} />)}
-      </div>
+    const mobileScoreSection = score && !isDesktop ? (
+      <MobileScoreSection score={score} scoreUrl={scoreUrl} />
+    ) : null;
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-        <div>
-          <p style={{ fontFamily: F.stamp, fontSize: "0.65rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.3rem" }}>{item.composer}</p>
-          <h2 style={{ fontFamily: F.display, fontSize: "1.55rem", fontWeight: 700, lineHeight: 1.15, color: C.ink }}>{item.title}</h2>
-          {item.detail && <p style={{ fontStyle: "italic", fontSize: "1rem", color: C.inkMid, marginTop: "0.2rem" }}>{item.detail}</p>}
+    const assessInner = (
+      <>
+        <PomodoroChip pomo={pomo} />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "1.25rem" }}>
+          <button onClick={() => { clearActive(); setView("dash"); }} style={{ background: "none", border: "none", cursor: "pointer", fontFamily: F.body, fontStyle: "italic", fontSize: "0.95rem", color: C.inkFaint, padding: 0 }}>← Journal</button>
+          <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, letterSpacing: "0.08em" }}>{idx + 1} of {queue.length}</span>
         </div>
-        <div style={{ marginTop: "0.2rem", flexShrink: 0, marginLeft: "0.75rem" }}><Badge bucket={card.bucket} /></div>
-      </div>
 
-      {item.notes && (
-        <div style={{ marginTop: "0.6rem", paddingLeft: "0.75rem", borderLeft: `2px solid ${C.rule}` }}>
-          <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.2rem" }}>Notes</p>
-          <p style={{ fontStyle: "italic", fontFamily: F.body, fontSize: "0.95rem", color: C.inkMid, whiteSpace: "pre-wrap" }}>{item.notes}</p>
+        <div style={{ display: "flex", gap: "4px", marginBottom: "1.5rem" }}>
+          {queue.map((_, i) => <div key={i} style={{ height: 2, flex: 1, borderRadius: 1, background: i < idx ? C.inkMid : i === idx ? C.action : C.rule }} />)}
         </div>
-      )}
 
-      <Rule thick />
-      <p style={{ fontStyle: "italic", fontSize: "0.95rem", color: C.inkMid, marginBottom: "1rem" }}>Play through cold, then mark each criterion:</p>
-
-      <div style={{ marginBottom: "1.5rem" }}>
-        {criteria.map((c, i) => (
-          <div key={c.id}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.65rem 0" }}>
-              <span style={{ fontSize: "1.1rem", color: C.ink }}>{c.label}</span>
-              <div style={{ display: "flex", gap: "0.4rem" }}>
-                <MarkButton active={scores[c.id] === true}  variant="pass" onClick={() => toggleScore(c.id, true)}>✓</MarkButton>
-                <MarkButton active={scores[c.id] === false} variant="fail" onClick={() => toggleScore(c.id, false)}>✗</MarkButton>
-              </div>
-            </div>
-            {i < criteria.length - 1 && <div style={{ borderTop: `1px solid ${C.rule}` }} />}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <p style={{ fontFamily: F.stamp, fontSize: "0.65rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.3rem" }}>{item.composer}</p>
+            <h2 style={{ fontFamily: F.display, fontSize: "1.55rem", fontWeight: 700, lineHeight: 1.15, color: C.ink }}>{item.title}</h2>
+            {item.detail && <p style={{ fontStyle: "italic", fontSize: "1rem", color: C.inkMid, marginTop: "0.2rem" }}>{item.detail}</p>}
           </div>
-        ))}
-      </div>
+          <div style={{ marginTop: "0.2rem", flexShrink: 0, marginLeft: "0.75rem" }}><Badge bucket={card.bucket} /></div>
+        </div>
 
-      <button onClick={submit} disabled={!allRated} style={{ width: "100%", fontFamily: F.display, fontSize: "1rem", padding: "0.75rem", background: allRated ? C.action : "transparent", color: allRated ? C.paperLt : C.inkFaint, border: `1px solid ${allRated ? C.action : C.rule}`, borderRadius: "1px", cursor: allRated ? "pointer" : "not-allowed" }}>
-        {allRated ? "Record assessment" : `Mark all criteria · ${Object.values(scores).filter((v) => v !== undefined).length} / ${criteria.length}`}
-      </button>
+        {item.notes && (
+          <div style={{ marginTop: "0.6rem", paddingLeft: "0.75rem", borderLeft: `2px solid ${C.rule}` }}>
+            <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.2rem" }}>Notes</p>
+            <p style={{ fontStyle: "italic", fontFamily: F.body, fontSize: "0.95rem", color: C.inkMid, whiteSpace: "pre-wrap" }}>{item.notes}</p>
+          </div>
+        )}
 
-      <PomodoroControls pomo={pomo} />
-      <Tuner />
-      <Metronome />
-      <Recorder itemId={item.id} limit={recordingLimit(settings)} />
-    </Page>
-  );
+        <Rule thick />
+        <p style={{ fontStyle: "italic", fontSize: "0.95rem", color: C.inkMid, marginBottom: "1rem" }}>Play through cold, then mark each criterion:</p>
+
+        <div style={{ marginBottom: "1.5rem" }}>
+          {criteria.map((c, i) => (
+            <div key={c.id}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.65rem 0" }}>
+                <span style={{ fontSize: "1.1rem", color: C.ink }}>{c.label}</span>
+                <div style={{ display: "flex", gap: "0.4rem" }}>
+                  <MarkButton active={scores[c.id] === true}  variant="pass" onClick={() => toggleScore(c.id, true)}>✓</MarkButton>
+                  <MarkButton active={scores[c.id] === false} variant="fail" onClick={() => toggleScore(c.id, false)}>✗</MarkButton>
+                </div>
+              </div>
+              {i < criteria.length - 1 && <div style={{ borderTop: `1px solid ${C.rule}` }} />}
+            </div>
+          ))}
+        </div>
+
+        <button onClick={submit} disabled={!allRated} style={{ width: "100%", fontFamily: F.display, fontSize: "1rem", padding: "0.75rem", background: allRated ? C.action : "transparent", color: allRated ? C.paperLt : C.inkFaint, border: `1px solid ${allRated ? C.action : C.rule}`, borderRadius: "1px", cursor: allRated ? "pointer" : "not-allowed" }}>
+          {allRated ? "Record assessment" : `Mark all criteria · ${Object.values(scores).filter((v) => v !== undefined).length} / ${criteria.length}`}
+        </button>
+
+        {mobileScoreSection}
+        <PomodoroControls pomo={pomo} />
+        <Tuner />
+        <Metronome />
+        <Recorder itemId={item.id} limit={recordingLimit(settings)} />
+      </>
+    );
+
+    if (isDesktop && score) {
+      return (
+        <Page wide>
+          <div style={{ display: "flex", gap: "2rem", alignItems: "flex-start" }}>
+            <div style={{ flex: "0 0 380px", minWidth: 0 }}>
+              {assessInner}
+            </div>
+            <div style={{ flex: 1, minWidth: 0, position: "sticky", top: "1rem" }}>
+              {scoreViewer}
+            </div>
+          </div>
+        </Page>
+      );
+    }
+
+    return <Page>{assessInner}</Page>;
+  }
 
   // ── Result ────────────────────────────────────────────────────────────────
 

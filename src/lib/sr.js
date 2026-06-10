@@ -1,3 +1,10 @@
+// ── Attachment validation ─────────────────────────────────────────────────────
+
+export const ATTACH_TYPES = ["application/pdf", "image/png", "image/jpeg"];
+
+export const validAttachment = (f) =>
+  !!f && ATTACH_TYPES.includes(f.type) && f.size > 0 && f.size <= 15 * 1024 * 1024;
+
 // ── Default content ───────────────────────────────────────────────────────────
 
 export const DEFAULT_EXCERPTS = [
