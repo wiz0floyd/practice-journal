@@ -146,6 +146,7 @@ export const KEYS = {
   sessions: "pj_sessions_v1",
   badges:   "pj_badges_v1",
   meta:     "pj_meta_v1",
+  active:   "pj_active_session_v1",
 };
 
 export const load = (key, fallback) => { try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : fallback; } catch { return fallback; } };
@@ -216,6 +217,22 @@ export const scoreColor = (ups, total) => {
   const r = ups / (total || 4);
   return r > 0.75 ? "pass" : r > 0.5 ? "warm" : "fail";
 };
+
+export const buildExport = (storage = localStorage) => {
+  const data = {};
+  for (const k of Object.values(KEYS)) {
+    if (k === KEYS.active) continue;
+    const raw = storage.getItem(k);
+    if (raw !== null) {
+      try { data[k] = JSON.parse(raw); } catch { /* skip corrupt */ }
+    }
+  }
+  return { app: "practice-journal", version: 1, exported: new Date().toISOString(), data };
+};
+
+export const validImport = (obj) => !!(obj && obj.app === "practice-journal" && obj.data && typeof obj.data === "object" && !Array.isArray(obj.data));
+
+export const restoreQueue = (queueIds, cards) => (queueIds ?? []).map((id) => cards.find((c) => c.id === id)).filter(Boolean);
 
 export const syncCards = (items, cards) => {
   const ids     = new Set(items.map((e) => e.id));

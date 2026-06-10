@@ -6,6 +6,7 @@ import {
   itemTags, parseTags, isCardPinned, cardMatchesTag, sessionPool, buildQueue,
   weeklyStats, streakDays, BADGES, computeBadges, bucketTransitions, scoreColor,
   pomodoroMinutes, nextPhase, fmtClock, tapBpm,
+  buildExport, validImport, restoreQueue,
 } from "./src/lib/sr.js";
 import { supabase } from "./src/lib/supabase.js";
 import { stampAndUpsert, pullUserData } from "./src/lib/sync.js";
@@ -623,6 +624,10 @@ export default function App() {
   const [sessionLength, setSessionLength] = useState(4);
   const [tagFilter,     setTagFilter]     = useState(null);
   const [sessionNote,   setSessionNote]   = useState("");
+  const [pendingResume, setPendingResume] = useState(() => load(KEYS.active, null));
+
+  // Import file input ref
+  const importRef = useRef(null);
 
   // Repertoire edit state
   const [editingId, setEditingId] = useState(null);
@@ -681,6 +686,20 @@ export default function App() {
     stampAndUpsert(KEYS.badges, badges, userRef.current);
   }, [badges]);
   useEffect(() => { isMounted.current = true; }, []);
+
+  // ── Active session snapshot (device-local, not synced) ────────────────────
+
+  const clearActive = () => { try { localStorage.removeItem(KEYS.active); } catch {} };
+
+  useEffect(() => {
+    if (view === "assess" && queue.length) {
+      save(KEYS.active, { stage: "assess", queueIds: queue.map((q) => q.id), idx, scores });
+    } else if (view === "result" && queue.length && result) {
+      save(KEYS.active, { stage: "result", queueIds: queue.map((q) => q.id), idx, result: { ...result, item: undefined, itemId: result.item.id } });
+    } else if (view === "sessionNote" && queue.length) {
+      save(KEYS.active, { stage: "note", queueIds: queue.map((q) => q.id) });
+    }
+  }, [view, queue, idx, scores, result]);
 
   // Badge award effect
   useEffect(() => {
@@ -843,6 +862,51 @@ export default function App() {
             })}
           </div>
         ) : null;
+      })()}
+
+      {pendingResume && restoreQueue(pendingResume.queueIds, cards).length > 0 && (() => {
+        const rq = restoreQueue(pendingResume.queueIds, cards);
+        const discard = () => { clearActive(); setPendingResume(null); };
+        const resume = () => {
+          const q = restoreQueue(pendingResume.queueIds, cards);
+          if (!q.length) { discard(); return; }
+          setQueue(q);
+          if (pendingResume.stage === "result") {
+            const r = pendingResume.result;
+            const it = items.find((x) => x.id === r.itemId);
+            if (!it) {
+              const i = Math.min(pendingResume.idx ?? 0, q.length - 1);
+              setIdx(i); setScores(pendingResume.scores ?? {}); setResult(null); setView("assess");
+            } else {
+              setIdx(Math.min(pendingResume.idx ?? 0, q.length - 1));
+              setScores({});
+              setResult({ ...r, item: it });
+              setView("result");
+            }
+          } else if (pendingResume.stage === "note") {
+            setSessionNote(""); setView("sessionNote");
+          } else {
+            const i = Math.min(pendingResume.idx ?? 0, q.length - 1);
+            setIdx(i); setScores(pendingResume.scores ?? {}); setResult(null); setView("assess");
+          }
+          setPendingResume(null);
+        };
+        return (
+          <div style={{ border: `1.5px solid ${C.action}`, padding: "0.75rem", marginBottom: "1rem", borderRadius: "1px" }}>
+            <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.15em", textTransform: "uppercase", color: C.action, marginBottom: "0.3rem" }}>Interrupted session</p>
+            <p style={{ fontStyle: "italic", fontSize: "0.95rem", color: C.inkMid, marginBottom: "0.75rem" }}>
+              Resume where you left off — item {Math.min((pendingResume.idx ?? 0) + 1, rq.length)} of {rq.length}
+            </p>
+            <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+              <button onClick={resume} style={{ fontFamily: F.display, fontSize: "1rem", padding: "0.5rem 1rem", background: C.action, color: C.paperLt, border: "none", borderRadius: "1px", cursor: "pointer" }}>
+                Resume session
+              </button>
+              <button onClick={discard} style={{ fontFamily: F.body, fontStyle: "italic", fontSize: "0.95rem", padding: "3px 10px", background: "transparent", border: `1px solid ${C.rule}`, color: C.inkFaint, borderRadius: "1px", cursor: "pointer" }}>
+                discard
+              </button>
+            </div>
+          </div>
+        );
       })()}
 
       {dueCards.length > 0 ? (() => {
@@ -1075,6 +1139,58 @@ export default function App() {
           {i === 0 && <div style={{ borderTop: `1px solid ${C.rule}` }} />}
         </div>
       ))}
+
+      <Rule thick />
+
+      <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.15em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.3rem" }}>Backup</p>
+      <p style={{ fontStyle: "italic", fontSize: "0.95rem", color: C.inkMid, marginBottom: "0.75rem" }}>Download all journal data as JSON, or restore from a backup file.</p>
+
+      <input
+        type="file"
+        accept="application/json,.json"
+        ref={importRef}
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+          file.text().then((text) => {
+            let parsed;
+            try { parsed = JSON.parse(text); } catch { window.alert("Not a valid Practice Journal backup file."); return; }
+            if (!validImport(parsed)) { window.alert("Not a valid Practice Journal backup file."); return; }
+            if (window.confirm("Replace ALL current data with this backup? Items, history, sessions, badges, and settings will be overwritten.")) {
+              for (const [k, v] of Object.entries(parsed.data)) {
+                if (Object.values(KEYS).includes(k)) save(k, v);
+              }
+              window.location.reload();
+            }
+          });
+          e.target.value = "";
+        }}
+      />
+
+      <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+        <button
+          onClick={() => {
+            const payload = buildExport();
+            const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `practice-journal-${new Date().toISOString().slice(0, 10)}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+          }}
+          style={{ fontFamily: F.body, fontStyle: "italic", fontSize: "0.95rem", padding: "3px 10px", background: "transparent", border: `1px solid ${C.rule}`, color: C.inkFaint, borderRadius: "1px", cursor: "pointer" }}
+        >
+          Export data
+        </button>
+        <button
+          onClick={() => importRef.current?.click()}
+          style={{ fontFamily: F.body, fontStyle: "italic", fontSize: "0.95rem", padding: "3px 10px", background: "transparent", border: `1px solid ${C.rule}`, color: C.inkFaint, borderRadius: "1px", cursor: "pointer" }}
+        >
+          Import data…
+        </button>
+      </div>
     </Page>
   );
 
@@ -1298,7 +1414,7 @@ export default function App() {
     <Page>
       <PomodoroChip pomo={pomo} />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "1.25rem" }}>
-        <button onClick={() => setView("dash")} style={{ background: "none", border: "none", cursor: "pointer", fontFamily: F.body, fontStyle: "italic", fontSize: "0.95rem", color: C.inkFaint, padding: 0 }}>← Journal</button>
+        <button onClick={() => { clearActive(); setView("dash"); }} style={{ background: "none", border: "none", cursor: "pointer", fontFamily: F.body, fontStyle: "italic", fontSize: "0.95rem", color: C.inkFaint, padding: 0 }}>← Journal</button>
         <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, letterSpacing: "0.08em" }}>{idx + 1} of {queue.length}</span>
       </div>
 
@@ -1401,6 +1517,7 @@ export default function App() {
 
   if (view === "sessionNote") {
     const closeSession = (note) => {
+      clearActive();
       setSessions((p) => [...p, { date: new Date().toISOString(), note: note.trim(), itemIds: queue.map((q) => q.id) }]);
       setView("dash");
     };

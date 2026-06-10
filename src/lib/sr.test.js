@@ -6,6 +6,7 @@ import {
   dayKey, streakDays, weeklyStats,
   computeBadges, bucketTransitions, scoreColor,
   pomodoroMinutes, nextPhase, fmtClock, tapBpm,
+  buildExport, validImport, restoreQueue, KEYS,
 } from './sr.js'
 
 describe('isDue', () => {
@@ -716,6 +717,98 @@ describe('tapBpm', () => {
   it('returns null for zero gap', () => {
     const base = 1000000
     expect(tapBpm([base, base])).toBe(null)
+  })
+})
+
+// ── buildExport ───────────────────────────────────────────────────────────────
+
+describe('buildExport', () => {
+  const makeStorage = (entries) => ({
+    getItem: (k) => (k in entries ? entries[k] : null),
+  })
+
+  it('returns envelope with app, version, exported, data fields', () => {
+    const result = buildExport(makeStorage({}))
+    expect(result.app).toBe('practice-journal')
+    expect(result.version).toBe(1)
+    expect(typeof result.exported).toBe('string')
+    expect(typeof result.data).toBe('object')
+    expect(Array.isArray(result.data)).toBe(false)
+  })
+
+  it('includes only KEYS values (not active) that exist in storage', () => {
+    const storage = makeStorage({ [KEYS.items]: JSON.stringify([{ id: 'a' }]) })
+    const result = buildExport(storage)
+    expect(result.data[KEYS.items]).toEqual([{ id: 'a' }])
+  })
+
+  it('skips KEYS.active even if present in storage', () => {
+    const storage = makeStorage({ [KEYS.active]: JSON.stringify({ stage: 'assess' }) })
+    const result = buildExport(storage)
+    expect(KEYS.active in result.data).toBe(false)
+  })
+
+  it('skips keys not present in storage (null)', () => {
+    const result = buildExport(makeStorage({}))
+    expect(Object.keys(result.data)).toHaveLength(0)
+  })
+
+  it('skips keys with corrupt JSON', () => {
+    const storage = makeStorage({ [KEYS.items]: 'not-json', [KEYS.cards]: JSON.stringify([]) })
+    const result = buildExport(storage)
+    expect(KEYS.items in result.data).toBe(false)
+    expect(result.data[KEYS.cards]).toEqual([])
+  })
+})
+
+// ── validImport ───────────────────────────────────────────────────────────────
+
+describe('validImport', () => {
+  it('accepts a valid envelope', () => {
+    expect(validImport({ app: 'practice-journal', version: 1, exported: 'x', data: {} })).toBe(true)
+  })
+  it('rejects null', () => {
+    expect(validImport(null)).toBe(false)
+  })
+  it('rejects wrong app name', () => {
+    expect(validImport({ app: 'other', data: {} })).toBe(false)
+  })
+  it('rejects missing data', () => {
+    expect(validImport({ app: 'practice-journal' })).toBe(false)
+  })
+  it('rejects when data is an array', () => {
+    expect(validImport({ app: 'practice-journal', data: [] })).toBe(false)
+  })
+})
+
+// ── restoreQueue ──────────────────────────────────────────────────────────────
+
+describe('restoreQueue', () => {
+  const cards = [
+    { id: 'a', bucket: 'hot' },
+    { id: 'b', bucket: 'warm' },
+    { id: 'c', bucket: 'cold' },
+  ]
+
+  it('maps ids to matching cards in order', () => {
+    const q = restoreQueue(['b', 'a'], cards)
+    expect(q).toHaveLength(2)
+    expect(q[0].id).toBe('b')
+    expect(q[1].id).toBe('a')
+  })
+
+  it('drops ids that have no matching card', () => {
+    const q = restoreQueue(['a', 'z', 'c'], cards)
+    expect(q).toHaveLength(2)
+    expect(q.map((c) => c.id)).toEqual(['a', 'c'])
+  })
+
+  it('handles undefined queueIds gracefully', () => {
+    expect(restoreQueue(undefined, cards)).toEqual([])
+  })
+
+  it('returns empty array when no ids match', () => {
+    expect(restoreQueue(['x', 'y'], cards)).toEqual([])
   })
 })
 
