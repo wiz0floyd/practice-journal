@@ -9,6 +9,7 @@ import {
   buildExport, validImport, restoreQueue, KEYS,
   freqToNote, autoCorrelate,
   recordingLimit, keepNewest, fmtBytes,
+  validAttachment,
 } from './sr.js'
 
 describe('isDue', () => {
@@ -860,6 +861,40 @@ describe('restoreQueue', () => {
 
   it('returns empty array when no ids match', () => {
     expect(restoreQueue(['x', 'y'], cards)).toEqual([])
+  })
+})
+
+// ── validAttachment ───────────────────────────────────────────────────────────
+
+describe('validAttachment', () => {
+  const MB15 = 15 * 1024 * 1024;
+
+  it('accepts a valid PDF under 15 MB', () => {
+    expect(validAttachment({ type: 'application/pdf', size: MB15 })).toBe(true)
+  })
+  it('accepts a valid PNG under 15 MB', () => {
+    expect(validAttachment({ type: 'image/png', size: 1024 })).toBe(true)
+  })
+  it('accepts a valid JPEG under 15 MB', () => {
+    expect(validAttachment({ type: 'image/jpeg', size: MB15 })).toBe(true)
+  })
+  it('rejects null', () => {
+    expect(validAttachment(null)).toBe(false)
+  })
+  it('rejects undefined', () => {
+    expect(validAttachment(undefined)).toBe(false)
+  })
+  it('rejects wrong type image/gif', () => {
+    expect(validAttachment({ type: 'image/gif', size: 1024 })).toBe(false)
+  })
+  it('rejects wrong type text/plain', () => {
+    expect(validAttachment({ type: 'text/plain', size: 1024 })).toBe(false)
+  })
+  it('rejects zero size', () => {
+    expect(validAttachment({ type: 'application/pdf', size: 0 })).toBe(false)
+  })
+  it('rejects size over 15 MB (15 * 1024 * 1024 + 1)', () => {
+    expect(validAttachment({ type: 'application/pdf', size: MB15 + 1 })).toBe(false)
   })
 })
 
