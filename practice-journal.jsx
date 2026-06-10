@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import {
   BUCKET, CRITERIA, DEFAULT_EXCERPTS, DEFAULT_SETTINGS,
   isDue, formatDue, draftValid, emptyDraft, newId, shuffle,
-  advanceBucket, bucketSessions, encodeWAV, syncCards, KEYS, load, save,
+  advanceBucket, bucketSessions, encodeWAV, syncCards, KEYS, load, save, getCriteria,
 } from "./src/lib/sr.js";
 import { supabase } from "./src/lib/supabase.js";
 import { stampAndUpsert, pullUserData } from "./src/lib/sync.js";
@@ -372,6 +372,7 @@ export default function App() {
   }, [settings]);
   useEffect(() => { isMounted.current = true; }, []);
 
+  const criteria = getCriteria(settings);
   const dueCards = cards.filter(isDue);
   const card     = queue[idx];
   const item     = card ? items.find((e) => e.id === card.id) : null;
@@ -386,17 +387,17 @@ export default function App() {
 
   const toggleScore = (id, val) => setScores((p) => ({ ...p, [id]: p[id] === val ? undefined : val }));
 
-  const allRated = CRITERIA.every((c) => scores[c.id] !== undefined);
+  const allRated = criteria.every((c) => scores[c.id] !== undefined);
 
   const submit = () => {
-    const ups    = CRITERIA.filter((c) => scores[c.id] === true).length;
-    const nb     = advanceBucket(card.bucket, ups);
-    const failed = CRITERIA.filter((c) => scores[c.id] === false).map((c) => c.label);
+    const ups    = criteria.filter((c) => scores[c.id] === true).length;
+    const nb     = advanceBucket(card.bucket, ups, criteria.length);
+    const failed = criteria.filter((c) => scores[c.id] === false).map((c) => c.label);
     setCards((prev) => prev.map((c) => c.id !== card.id ? c : {
       ...c, bucket: nb, sessionsUntilDue: bucketSessions(nb, settings),
       history: [...c.history, { date: new Date().toISOString(), scores: { ...scores }, ups }],
     }));
-    setResult({ item, oldBucket: card.bucket, newBucket: nb, ups, failed });
+    setResult({ item, oldBucket: card.bucket, newBucket: nb, ups, failed, total: criteria.length });
     setView("result");
   };
 
@@ -553,6 +554,65 @@ export default function App() {
           Restore default intervals
         </button>
       </div>
+
+      <Rule thick />
+
+      <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.15em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.3rem" }}>Assessment rubric</p>
+      <p style={{ fontStyle: "italic", fontSize: "0.95rem", color: C.inkMid, marginBottom: "0.75rem" }}>Define 1–6 criteria to mark each assessment against.</p>
+
+      {(settings.criteria ?? CRITERIA).map((c, i) => (
+        <div key={c.id}>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.5rem 0" }}>
+            <div style={{ flex: 1 }}>
+              <JournalInput
+                value={c.label}
+                placeholder="Criterion label"
+                onChange={(v) => {
+                  const base = settings.criteria ?? CRITERIA.map((cr) => ({ ...cr }));
+                  const updated = base.map((cr, j) => j === i ? { ...cr, label: v } : cr);
+                  setSettings((s) => ({ ...s, criteria: updated }));
+                }}
+              />
+            </div>
+            <button
+              onClick={() => {
+                const base = settings.criteria ?? CRITERIA.map((cr) => ({ ...cr }));
+                const updated = base.filter((_, j) => j !== i);
+                setSettings((s) => ({ ...s, criteria: updated }));
+              }}
+              disabled={(settings.criteria ?? CRITERIA).length <= 1}
+              style={inkBtn({ color: C.fail, letterSpacing: 0, fontSize: "0.85rem", opacity: (settings.criteria ?? CRITERIA).length <= 1 ? 0.3 : 1, cursor: (settings.criteria ?? CRITERIA).length <= 1 ? "not-allowed" : "pointer" })}
+            >
+              ×
+            </button>
+          </div>
+          {i < (settings.criteria ?? CRITERIA).length - 1 && <div style={{ borderTop: `1px solid ${C.rule}` }} />}
+        </div>
+      ))}
+
+      {(settings.criteria ?? CRITERIA).length < 6 && (
+        <div style={{ marginTop: "0.75rem" }}>
+          <button
+            onClick={() => {
+              const base = settings.criteria ?? CRITERIA.map((cr) => ({ ...cr }));
+              setSettings((s) => ({ ...s, criteria: [...base, { id: `crit_${Date.now().toString(36)}`, label: "" }] }));
+            }}
+            style={inkBtn({ color: C.inkMid, display: "flex", alignItems: "center", gap: "0.4rem" })}
+          >
+            <span style={{ fontSize: "1rem", fontFamily: F.display, lineHeight: 1 }}>+</span> Add criterion
+          </button>
+        </div>
+      )}
+
+      <Rule />
+      <div style={{ textAlign: "center", marginTop: "1rem" }}>
+        <button
+          onClick={() => setSettings((s) => ({ ...s, criteria: CRITERIA.map((c) => ({ ...c })) }))}
+          style={inkBtn({ color: C.inkFaint })}
+        >
+          Restore default rubric
+        </button>
+      </div>
     </Page>
   );
 
@@ -673,7 +733,7 @@ export default function App() {
       <p style={{ fontStyle: "italic", fontSize: "0.95rem", color: C.inkMid, marginBottom: "1rem" }}>Play through cold, then mark each criterion:</p>
 
       <div style={{ marginBottom: "1.5rem" }}>
-        {CRITERIA.map((c, i) => (
+        {criteria.map((c, i) => (
           <div key={c.id}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.65rem 0" }}>
               <span style={{ fontSize: "1.1rem", color: C.ink }}>{c.label}</span>
@@ -682,13 +742,13 @@ export default function App() {
                 <MarkButton active={scores[c.id] === false} variant="fail" onClick={() => toggleScore(c.id, false)}>✗</MarkButton>
               </div>
             </div>
-            {i < CRITERIA.length - 1 && <div style={{ borderTop: `1px solid ${C.rule}` }} />}
+            {i < criteria.length - 1 && <div style={{ borderTop: `1px solid ${C.rule}` }} />}
           </div>
         ))}
       </div>
 
       <button onClick={submit} disabled={!allRated} style={{ width: "100%", fontFamily: F.display, fontSize: "1rem", padding: "0.75rem", background: allRated ? C.action : "transparent", color: allRated ? C.paperLt : C.inkFaint, border: `1px solid ${allRated ? C.action : C.rule}`, borderRadius: "1px", cursor: allRated ? "pointer" : "not-allowed" }}>
-        {allRated ? "Record assessment" : `Mark all criteria · ${Object.values(scores).filter((v) => v !== undefined).length} / 4`}
+        {allRated ? "Record assessment" : `Mark all criteria · ${Object.values(scores).filter((v) => v !== undefined).length} / ${criteria.length}`}
       </button>
 
       <Recorder itemId={item.id} />
@@ -698,7 +758,7 @@ export default function App() {
   // ── Result ────────────────────────────────────────────────────────────────
 
   if (view === "result" && result) {
-    const { item, oldBucket, newBucket, ups, failed } = result;
+    const { item, oldBucket, newBucket, ups, failed, total = 4 } = result;
     const promoted = BUCKET[oldBucket].up === newBucket;
     const demoted  = BUCKET[oldBucket].dn === newBucket;
     return (
@@ -717,7 +777,7 @@ export default function App() {
               {promoted ? "promoted" : demoted ? "demoted" : "unchanged"}
             </span>
           </div>
-          <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, letterSpacing: "0.05em" }}>{ups}/4 · {formatDue(bucketSessions(newBucket, settings))}</p>
+          <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", color: C.inkFaint, letterSpacing: "0.05em" }}>{ups}/{total} · {formatDue(bucketSessions(newBucket, settings))}</p>
         </div>
         <Rule />
         <div style={{ marginBottom: "1.5rem" }}>

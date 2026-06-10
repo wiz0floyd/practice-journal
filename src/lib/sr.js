@@ -54,9 +54,16 @@ export const shuffle = (arr) => {
   return a;
 };
 
-export const advanceBucket = (cur, ups) => {
-  if (ups === 4) return BUCKET[cur].up ?? cur;
-  if (ups <= 2)  return BUCKET[cur].dn ?? cur;
+export const getCriteria = (settings) => {
+  const cs = Array.isArray(settings?.criteria)
+    ? settings.criteria.filter((c) => c && typeof c.label === "string" && c.label.trim())
+    : [];
+  return cs.length ? cs.slice(0, 6) : CRITERIA;
+};
+
+export const advanceBucket = (cur, ups, total = 4) => {
+  if (ups / total > 0.75) return BUCKET[cur].up ?? cur;
+  if (ups / total <= 0.5) return BUCKET[cur].dn ?? cur;
   return cur;
 };
 
