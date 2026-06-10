@@ -494,27 +494,44 @@ function Tuner() {
   const stop = () => {
     if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
     if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
-    if (ctxRef.current) { ctxRef.current.close(); ctxRef.current = null; }
     analyserRef.current = null;
     setRunning(false);
   };
 
-  useEffect(() => () => stop(), []); // cleanup on unmount
+  useEffect(() => () => {
+    stop();
+    if (ctxRef.current) { ctxRef.current.close(); ctxRef.current = null; }
+  }, []); // cleanup on unmount: stop rAF/tracks, then close ctx
 
   const start = async () => {
     setErr("");
     try {
+      // Create/reuse AudioContext SYNCHRONOUSLY before any await so the gesture
+      // context is preserved on Chrome for Android (suspended after await).
+      if (!ctxRef.current || ctxRef.current.state === "closed") ctxRef.current = new AudioContext();
+      const ctx = ctxRef.current;
+      if (ctx.state === "suspended") ctx.resume();
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
       });
       streamRef.current = stream;
-      const ctx = new AudioContext();
-      ctxRef.current = ctx;
       const analyser = ctx.createAnalyser();
-      analyser.fftSize = 2048;
+      analyser.fftSize = 4096;
       analyserRef.current = analyser;
       ctx.createMediaStreamSource(stream).connect(analyser);
-      bufRef.current = new Float32Array(2048);
+      bufRef.current = new Float32Array(analyser.fftSize);
+
+      // Ensure context is running after wiring; bail if it still isn't.
+      await ctx.resume();
+      if (ctx.state !== "running") {
+        setErr(`audio context ${ctx.state}`);
+        stream.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+        analyserRef.current = null;
+        return;
+      }
+
       setRunning(true);
 
       const loop = () => {
@@ -1246,6 +1263,8 @@ function PomodoroControls({ pomo }) {
   );
 }
 
+const SAFE_VIEWS = ["dash", "repertoire", "settings", "history"]; // views safe to restore from history state
+
 export default function App() {
   useFonts();
   const { user, signIn, signOut } = useAuth();
@@ -1270,6 +1289,28 @@ export default function App() {
   const [sessionNote,   setSessionNote]   = useState("");
   const [pendingResume, setPendingResume] = useState(() => load(KEYS.active, null));
   const [syncStatus,    setSyncStatus]    = useState("idle");
+
+  // ── SPA back-navigation (fix #41) ────────────────────────────────────────
+  const popNavRef  = useRef(false);
+  const lastViewRef = useRef(view);
+  // Push a history entry on every view change (except changes triggered by popstate).
+  useEffect(() => {
+    if (lastViewRef.current === view) return;
+    lastViewRef.current = view;
+    if (popNavRef.current) { popNavRef.current = false; return; }
+    window.history.pushState({ pjView: view }, "");
+  }, [view]);
+  // Seed the initial history entry and handle popstate.
+  useEffect(() => {
+    window.history.replaceState({ pjView: "dash" }, "");
+    const onPop = (e) => {
+      const v = e.state?.pjView;
+      popNavRef.current = true;
+      setView(SAFE_VIEWS.includes(v) ? v : "dash");
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   // Import file input ref
   const importRef = useRef(null);
