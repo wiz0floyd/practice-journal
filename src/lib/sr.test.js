@@ -3,6 +3,7 @@ import {
   isDue, formatDue, draftValid, advanceBucket, bucketSessions,
   syncCards, shuffle, encodeWAV, DEFAULT_SETTINGS, CRITERIA, getCriteria,
   parseTags, itemTags, isCardPinned, cardMatchesTag, sessionPool, buildQueue,
+  dayKey, streakDays, weeklyStats,
 } from './sr.js'
 
 describe('isDue', () => {
@@ -356,5 +357,131 @@ describe('advanceBucket proportional', () => {
   })
   it('demotes on 0/1 (=0, ≤0.5)', () => {
     expect(advanceBucket('warm', 0, 1)).toBe('hot')
+  })
+})
+
+describe('dayKey', () => {
+  it('formats local date as YYYY-MM-DD', () => {
+    expect(dayKey(new Date(2025, 0, 5))).toBe('2025-01-05')   // Jan 5
+    expect(dayKey(new Date(2025, 11, 31))).toBe('2025-12-31') // Dec 31
+    expect(dayKey(new Date(2024, 1, 29))).toBe('2024-02-29')  // leap day
+  })
+})
+
+describe('streakDays', () => {
+  const mkSessions = (...dateStrings) => dateStrings.map((d) => ({ date: d }))
+
+  it('returns 0 for empty sessions', () => {
+    expect(streakDays([], new Date(2025, 5, 9))).toBe(0)
+  })
+
+  it('returns 1 for a session today only', () => {
+    const now = new Date(2025, 5, 9)
+    const sessions = mkSessions(new Date(2025, 5, 9).toISOString())
+    expect(streakDays(sessions, now)).toBe(1)
+  })
+
+  it('returns 2 for sessions today and yesterday', () => {
+    const now = new Date(2025, 5, 9)
+    const sessions = mkSessions(
+      new Date(2025, 5, 8).toISOString(),
+      new Date(2025, 5, 9).toISOString(),
+    )
+    expect(streakDays(sessions, now)).toBe(2)
+  })
+
+  it('returns 1 for yesterday only (none today)', () => {
+    const now = new Date(2025, 5, 9)
+    const sessions = mkSessions(new Date(2025, 5, 8).toISOString())
+    expect(streakDays(sessions, now)).toBe(1)
+  })
+
+  it('returns 0 when the gap breaks the streak (two days ago only)', () => {
+    const now = new Date(2025, 5, 9)
+    const sessions = mkSessions(new Date(2025, 5, 7).toISOString())
+    expect(streakDays(sessions, now)).toBe(0)
+  })
+
+  it('counts consecutive days correctly even with a later gap', () => {
+    const now = new Date(2025, 5, 9)
+    // 9, 8, 7 → streak of 3; 5 is not consecutive so it stops
+    const sessions = mkSessions(
+      new Date(2025, 5, 7).toISOString(),
+      new Date(2025, 5, 8).toISOString(),
+      new Date(2025, 5, 9).toISOString(),
+      new Date(2025, 5, 5).toISOString(),
+    )
+    expect(streakDays(sessions, now)).toBe(3)
+  })
+
+  it('multiple sessions same day count once', () => {
+    const now = new Date(2025, 5, 9)
+    const sessions = mkSessions(
+      new Date(2025, 5, 9, 9, 0).toISOString(),
+      new Date(2025, 5, 9, 14, 0).toISOString(),
+      new Date(2025, 5, 8).toISOString(),
+    )
+    expect(streakDays(sessions, now)).toBe(2)
+  })
+})
+
+describe('weeklyStats', () => {
+  // Monday 2025-06-09
+  const monday = new Date(2025, 5, 9, 10, 0)
+  // Friday of same week
+  const friday = new Date(2025, 5, 13, 10, 0)
+  // Sunday before (last week)
+  const prevSunday = new Date(2025, 5, 8, 23, 59)
+
+  const mkItem = (id) => ({ id })
+  const mkCard = (id, bucket = 'hot') => ({ id, bucket, sessionsUntilDue: 0, history: [] })
+
+  it('counts sessions within the Monday-start week', () => {
+    const sessions = [
+      { date: new Date(2025, 5, 9).toISOString(), itemIds: ['a'], note: '' },   // this week (Monday)
+      { date: new Date(2025, 5, 11).toISOString(), itemIds: ['b'], note: '' },  // this week (Wed)
+      { date: new Date(2025, 5, 8).toISOString(), itemIds: ['c'], note: '' },   // last week (Sunday)
+    ]
+    const stats = weeklyStats(sessions, [], [], friday)
+    expect(stats.sessionsThisWeek).toBe(2)
+  })
+
+  it('unions itemIds across sessions this week', () => {
+    const sessions = [
+      { date: new Date(2025, 5, 9).toISOString(), itemIds: ['a', 'b'], note: '' },
+      { date: new Date(2025, 5, 10).toISOString(), itemIds: ['b', 'c'], note: '' },
+    ]
+    const stats = weeklyStats(sessions, [], [], friday)
+    expect(stats.itemsThisWeek).toBe(3) // a, b, c
+  })
+
+  it('excludes sessions before week start', () => {
+    const sessions = [
+      { date: prevSunday.toISOString(), itemIds: ['x'], note: '' },
+    ]
+    const stats = weeklyStats(sessions, [], [], monday)
+    expect(stats.sessionsThisWeek).toBe(0)
+    expect(stats.itemsThisWeek).toBe(0)
+  })
+
+  it('counts bucket distribution from cards matching items', () => {
+    const items = [mkItem('a'), mkItem('b'), mkItem('c')]
+    const cards = [mkCard('a', 'hot'), mkCard('b', 'warm'), mkCard('c', 'cold'), mkCard('orphan', 'hot')]
+    const stats = weeklyStats([], cards, items, monday)
+    expect(stats.buckets).toEqual({ hot: 1, warm: 1, cold: 1 })
+  })
+
+  it('ignores orphan cards (no matching item) in bucket counts', () => {
+    const items = [mkItem('a')]
+    const cards = [mkCard('a', 'hot'), mkCard('b', 'hot')]
+    const stats = weeklyStats([], cards, items, monday)
+    expect(stats.buckets.hot).toBe(1)
+  })
+
+  it('includes streak in result', () => {
+    const now = new Date(2025, 5, 9)
+    const sessions = [{ date: new Date(2025, 5, 9).toISOString(), itemIds: [], note: '' }]
+    const stats = weeklyStats(sessions, [], [], now)
+    expect(stats.streak).toBe(1)
   })
 })

@@ -117,11 +117,44 @@ export const KEYS = {
   cards:    "pj_cards_v1",
   context:  "pj_context_v1",
   settings: "pj_settings_v1",
+  sessions: "pj_sessions_v1",
   meta:     "pj_meta_v1",
 };
 
 export const load = (key, fallback) => { try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : fallback; } catch { return fallback; } };
 export const save = (key, val)       => { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} };
+
+export const dayKey = (d) => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`; };
+
+export const streakDays = (sessions, now = new Date()) => {
+  const days = new Set(sessions.map((s) => dayKey(s.date)));
+  const today = dayKey(now);
+  let current = days.has(today) ? now : new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  if (!days.has(dayKey(current))) return 0;
+  let count = 0;
+  while (days.has(dayKey(current))) {
+    count++;
+    current = new Date(current.getFullYear(), current.getMonth(), current.getDate() - 1);
+  }
+  return count;
+};
+
+export const weeklyStats = (sessions, cards, items, now = new Date()) => {
+  const day = now.getDay(); // 0=Sun, 1=Mon, ...6=Sat
+  const daysSinceMonday = (day + 6) % 7;
+  const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysSinceMonday);
+  const thisSessions = sessions.filter((s) => { const d = new Date(s.date); return d >= weekStart && d <= now; });
+  const itemSet = new Set(thisSessions.flatMap((s) => s.itemIds ?? []));
+  const itemIds = new Set(items.map((i) => i.id));
+  const buckets = { hot: 0, warm: 0, cold: 0 };
+  for (const c of cards) { if (itemIds.has(c.id) && buckets[c.bucket] !== undefined) buckets[c.bucket]++; }
+  return {
+    sessionsThisWeek: thisSessions.length,
+    itemsThisWeek:    itemSet.size,
+    streak:           streakDays(sessions, now),
+    buckets,
+  };
+};
 
 export const syncCards = (items, cards) => {
   const ids     = new Set(items.map((e) => e.id));
