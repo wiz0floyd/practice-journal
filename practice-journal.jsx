@@ -501,11 +501,13 @@ function Tuner() {
   const angleRef    = useRef(0);
   const lastSetRef  = useRef(0);
   const lastValidRef = useRef(0);
+  const freqHistRef  = useRef([]);
 
   const stop = () => {
     if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
     if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
     analyserRef.current = null;
+    freqHistRef.current = [];
     setRunning(false);
   };
 
@@ -551,7 +553,11 @@ function Tuner() {
         const now = performance.now();
         if (f > 0) {
           lastValidRef.current = now;
-          const n = freqToNote(f);
+          const hist = freqHistRef.current;
+          hist.push(f);
+          if (hist.length > 8) hist.shift();
+          const smoothedF = hist.reduce((a, b) => a + b, 0) / hist.length;
+          const n = freqToNote(smoothedF);
           if (discRef.current) {
             if (Math.abs(n.cents) >= 2) {
               angleRef.current += Math.max(-6, Math.min(6, n.cents * 0.12));
@@ -559,7 +565,7 @@ function Tuner() {
             discRef.current.style.transform = `rotate(${angleRef.current}deg)`;
           }
           if (now - lastSetRef.current > 100) {
-            setReading({ ...n, freq: Math.round(f * 10) / 10 });
+            setReading({ ...n, freq: Math.round(smoothedF * 10) / 10 });
             lastSetRef.current = now;
           }
         } else {
@@ -602,7 +608,7 @@ function Tuner() {
               <button
                 onClick={() => setMode("chromatic")}
                 aria-pressed={mode === "chromatic"}
-                style={inkBtn({ color: mode === "chromatic" ? C.action : C.inkFaint })}
+                style={inkBtn({ color: mode === "chromatic" ? C.action : C.inkFaint, padding: "8px 6px" })}
               >
                 chromatic
               </button>
@@ -610,7 +616,7 @@ function Tuner() {
               <button
                 onClick={() => setMode("strobe")}
                 aria-pressed={mode === "strobe"}
-                style={inkBtn({ color: mode === "strobe" ? C.action : C.inkFaint })}
+                style={inkBtn({ color: mode === "strobe" ? C.action : C.inkFaint, padding: "8px 6px" })}
               >
                 strobe
               </button>
@@ -622,7 +628,7 @@ function Tuner() {
                 fontFamily: F.body,
                 fontStyle: "italic",
                 fontSize: "0.9rem",
-                padding: "2px 10px",
+                padding: "8px 14px",
                 background: "transparent",
                 border: `1px solid ${running ? C.fail : C.rule}`,
                 color: running ? C.fail : C.inkMid,
@@ -1340,6 +1346,9 @@ export default function App() {
   // Import file input ref
   const importRef = useRef(null);
 
+  // Dashboard piece selection (inline detail expand)
+  const [selectedPieceId, setSelectedPieceId] = useState(null);
+
   // Repertoire edit state
   const [editingId, setEditingId] = useState(null);
   const [editDraft, setEditDraft] = useState(emptyDraft());
@@ -1622,7 +1631,7 @@ export default function App() {
                   aria-pressed={tagFilter === tag}
                   style={{
                     fontFamily: F.stamp, fontSize: "0.58rem", textTransform: "uppercase",
-                    letterSpacing: "0.1em", padding: "2px 8px", borderRadius: "1px",
+                    letterSpacing: "0.1em", padding: "6px 12px", borderRadius: "1px",
                     cursor: "pointer", border: `1px solid ${active ? C.action : C.ruleDk}`,
                     background: active ? C.action : "transparent",
                     color: active ? C.paperLt : C.inkMid,
@@ -1701,13 +1710,22 @@ export default function App() {
       </div>
 
       {cards.filter((c) => !tagFilter || cardMatchesTag(c, items, tagFilter)).map((c) => {
-        const it     = items.find((e) => e.id === c.id);
+        const it      = items.find((e) => e.id === c.id);
         if (!it) return null;
-        const due    = isDue(c);
-        const pinned = isCardPinned(c, items);
+        const due     = isDue(c);
+        const pinned  = isCardPinned(c, items);
+        const open    = selectedPieceId === c.id;
+        const tags    = itemTags(it);
         return (
           <div key={c.id}>
-            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem", padding: "0.65rem 0", opacity: due || pinned ? 1 : 0.5 }}>
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => setSelectedPieceId(open ? null : c.id)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelectedPieceId(open ? null : c.id); } }}
+              aria-expanded={open}
+              style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem", padding: "0.85rem 0", opacity: due || pinned ? 1 : 0.5, cursor: "pointer" }}
+            >
               <div style={{ minWidth: 0 }}>
                 <p style={{ fontSize: "1rem", lineHeight: 1.3, color: C.ink }}>
                   <span style={{ fontWeight: 600 }}>{it.composer}</span>
@@ -1730,6 +1748,28 @@ export default function App() {
                 </span>
               </div>
             </div>
+            {open && (
+              <div style={{ paddingBottom: "0.85rem" }}>
+                {it.notes && (
+                  <p style={{ fontSize: "0.85rem", color: C.inkMid, marginBottom: "0.5rem" }}>{it.notes}</p>
+                )}
+                {tags.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginBottom: "0.6rem" }}>
+                    {tags.map((tag) => (
+                      <span key={tag} style={{ fontFamily: F.stamp, fontSize: "0.58rem", textTransform: "uppercase", letterSpacing: "0.1em", padding: "2px 8px", borderRadius: "1px", border: `1px solid ${C.ruleDk}`, color: C.inkMid }}>
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <button
+                  onClick={(e) => { e.stopPropagation(); startEdit(it); setView("repertoire"); }}
+                  style={inkBtn({ color: C.action, padding: "8px 0" })}
+                >
+                  Edit →
+                </button>
+              </div>
+            )}
             <div style={{ borderTop: `1px solid ${C.rule}` }} />
           </div>
         );
@@ -1757,13 +1797,13 @@ export default function App() {
       )}
 
       <div style={{ marginTop: "1.5rem", display: "flex", justifyContent: "center", gap: "1.75rem" }}>
-        <button onClick={() => { if (window.confirm("Reset all cards to Hot?")) setCards(syncCards(items, [])); }} style={inkBtn({ color: C.inkFaint })}>
+        <button onClick={() => { if (window.confirm("Reset all cards to Hot?")) setCards(syncCards(items, [])); }} style={inkBtn({ color: C.inkFaint, padding: "8px 4px" })}>
           Reset all cards
         </button>
-        <button onClick={() => setView("settings")} style={inkBtn({ color: C.inkFaint })}>
+        <button onClick={() => setView("settings")} style={inkBtn({ color: C.inkFaint, padding: "8px 4px" })}>
           Settings
         </button>
-        <button onClick={() => setView("history")} style={inkBtn({ color: C.inkFaint })}>
+        <button onClick={() => setView("history")} style={inkBtn({ color: C.inkFaint, padding: "8px 4px" })}>
           History
         </button>
       </div>
