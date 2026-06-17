@@ -2,7 +2,7 @@ name: CI / Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [main, practice-journal-dev]
   pull_request:
     branches: [main]
 
@@ -31,7 +31,7 @@ jobs:
 
   deploy:
     needs: [lint, test]
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/practice-journal-dev'
     runs-on: ubuntu-latest
     permissions:
       pages: write
