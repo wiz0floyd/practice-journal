@@ -34,11 +34,7 @@ jobs:
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/practice-journal-dev'
     runs-on: ubuntu-latest
     permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -46,13 +42,35 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run build
+
+      - name: Build (main → /practice-journal/)
+        if: github.ref == 'refs/heads/main'
+        run: npm run build
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-      - uses: actions/configure-pages@v4
-      - uses: actions/upload-pages-artifact@v3
+
+      - name: Build (dev → /practice-journal/dev/)
+        if: github.ref == 'refs/heads/practice-journal-dev'
+        run: npm run build
+        env:
+          VITE_BASE_PATH: /practice-journal/dev/
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+      - name: Deploy root (main)
+        if: github.ref == 'refs/heads/main'
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: dist
-      - id: deployment
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          keep_files: true
+
+      - name: Deploy dev/ subfolder
+        if: github.ref == 'refs/heads/practice-journal-dev'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          destination_dir: dev
+          keep_files: true
