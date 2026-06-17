@@ -483,6 +483,85 @@ function RecordingsSettings({ settings, setSettings, user }) {
   );
 }
 
+// ── Strobe canvas renderer ────────────────────────────────────────────────────
+
+function drawStrobeCanvas(canvas, phases, amps, note, inTune) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.offsetWidth || 160;
+  const cssH = canvas.offsetHeight || 160;
+  const pw = Math.round(cssW * dpr);
+  const ph = Math.round(cssH * dpr);
+  if (canvas.width !== pw || canvas.height !== ph) {
+    canvas.width  = pw;
+    canvas.height = ph;
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, pw, ph);
+  ctx.save();
+  ctx.scale(dpr, dpr);
+
+  const cx = cssW / 2, cy = cssH / 2;
+  const HARMONICS = 5;
+  const SEGMENTS  = 12;
+  const GAP       = 1.5;
+  const holeR     = 22;
+  const outerR    = cssW * 0.475;
+  const bandW     = (outerR - holeR) / HARMONICS;
+
+  // Rings: ring 1 (fundamental) innermost, ring 5 outermost
+  for (let k = 1; k <= HARMONICS; k++) {
+    const r0 = holeR + (k - 1) * bandW + GAP;
+    const r1 = holeR + k * bandW;
+    const phase = phases[k - 1];
+    const alpha = 0.2 + amps[k - 1] * 0.8;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(phase);
+    ctx.fillStyle = `rgba(28,18,9,${alpha.toFixed(3)})`; // C.ink
+
+    for (let seg = 0; seg < SEGMENTS; seg += 2) {
+      const a0 = (seg / SEGMENTS) * Math.PI * 2 - Math.PI / 2;
+      const a1 = ((seg + 1) / SEGMENTS) * Math.PI * 2 - Math.PI / 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, r1, a0, a1);
+      ctx.arc(0, 0, r0, a1, a0, true);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // Harmonic label on the right edge of each ring
+    const labelR = (r0 + r1) / 2;
+    ctx.save();
+    ctx.font = `${Math.round(bandW * 0.48)}px 'Special Elite', monospace`;
+    ctx.fillStyle = `rgba(118,104,79,${(0.5 + amps[k - 1] * 0.5).toFixed(2)})`; // C.inkFaint
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`${k}×`, cx + labelR + 3, cy);
+    ctx.restore();
+  }
+
+  // Center hole
+  ctx.beginPath();
+  ctx.arc(cx, cy, holeR - GAP, 0, Math.PI * 2);
+  ctx.fillStyle = "#f5eed9"; // C.paper
+  ctx.fill();
+  ctx.strokeStyle = "#d8cdb5"; // C.rule
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Note name
+  const noteLabel = note ? `${note.name}${note.octave}` : "—";
+  ctx.font = `bold ${Math.round(holeR * 0.9)}px 'Playfair Display', Georgia, serif`;
+  ctx.fillStyle = inTune ? "#1a4a1a" : "#1c1209"; // C.pass : C.ink
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(noteLabel, cx, cy);
+
+  ctx.restore();
+}
+
 // ── Tuner ─────────────────────────────────────────────────────────────────────
 
 function Tuner() {
@@ -492,14 +571,16 @@ function Tuner() {
   const [reading, setReading] = useState(null);
   const [err,     setErr]     = useState("");
 
-  const ctxRef      = useRef(null);
-  const analyserRef = useRef(null);
-  const streamRef   = useRef(null);
-  const rafRef      = useRef(null);
-  const bufRef      = useRef(null);
-  const discRef     = useRef(null);
-  const angleRef    = useRef(0);
-  const lastSetRef  = useRef(0);
+  const ctxRef       = useRef(null);
+  const analyserRef  = useRef(null);
+  const streamRef    = useRef(null);
+  const rafRef       = useRef(null);
+  const bufRef       = useRef(null);
+  const canvasRef    = useRef(null);
+  const phaseRef     = useRef(new Float64Array(5));
+  const modeRef      = useRef(mode);
+  const freqDataRef  = useRef(null);
+  const lastSetRef   = useRef(0);
   const lastValidRef = useRef(0);
   const freqHistRef  = useRef([]);
 
@@ -515,6 +596,19 @@ function Tuner() {
     stop();
     if (ctxRef.current) { ctxRef.current.close(); ctxRef.current = null; }
   }, []); // cleanup on unmount: stop rAF/tracks, then close ctx
+
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+  useEffect(() => {
+    phaseRef.current.fill(0);
+    if (mode === "strobe") {
+      const id = setTimeout(() => {
+        if (canvasRef.current) {
+          drawStrobeCanvas(canvasRef.current, phaseRef.current, new Float32Array(5), null, false);
+        }
+      }, 0);
+      return () => clearTimeout(id);
+    }
+  }, [mode]);
 
   const start = async () => {
     setErr("");
@@ -533,7 +627,8 @@ function Tuner() {
       analyser.fftSize = 4096;
       analyserRef.current = analyser;
       ctx.createMediaStreamSource(stream).connect(analyser);
-      bufRef.current = new Float32Array(analyser.fftSize);
+      bufRef.current     = new Float32Array(analyser.fftSize);
+      freqDataRef.current = new Float32Array(analyser.frequencyBinCount);
 
       // Ensure context is running after wiring; bail if it still isn't.
       await ctx.resume();
@@ -558,19 +653,31 @@ function Tuner() {
           if (hist.length > 8) hist.shift();
           const smoothedF = hist.reduce((a, b) => a + b, 0) / hist.length;
           const n = freqToNote(smoothedF);
-          if (discRef.current) {
-            if (Math.abs(n.cents) >= 2) {
-              angleRef.current += Math.max(-6, Math.min(6, n.cents * 0.12));
+          if (modeRef.current === "strobe" && canvasRef.current && freqDataRef.current) {
+            analyserRef.current.getFloatFrequencyData(freqDataRef.current);
+            const binWidth = ctxRef.current.sampleRate / analyserRef.current.fftSize;
+            const phases = phaseRef.current;
+            const amps   = new Float32Array(5);
+            for (let k = 1; k <= 5; k++) {
+              const targetBin = Math.round((k * smoothedF) / binWidth);
+              let maxDb = -Infinity;
+              for (let b = Math.max(0, targetBin - 3); b <= Math.min(freqDataRef.current.length - 1, targetBin + 3); b++) {
+                if (freqDataRef.current[b] > maxDb) maxDb = freqDataRef.current[b];
+              }
+              amps[k - 1] = Math.max(0, Math.min(1, (maxDb + 100) / 80));
+              const delta = Math.max(-(4 + k), Math.min(4 + k, n.cents * 0.06 * k));
+              phases[k - 1] += (delta * Math.PI) / 180;
             }
-            discRef.current.style.transform = `rotate(${angleRef.current}deg)`;
+            drawStrobeCanvas(canvasRef.current, phases, amps, n, Math.abs(n.cents) <= 5);
           }
           if (now - lastSetRef.current > 100) {
             setReading({ ...n, freq: Math.round(smoothedF * 10) / 10 });
             lastSetRef.current = now;
           }
         } else {
-          if (discRef.current) {
-            discRef.current.style.transform = `rotate(${angleRef.current}deg)`;
+          if (modeRef.current === "strobe" && canvasRef.current) {
+            const amps = new Float32Array(5);
+            drawStrobeCanvas(canvasRef.current, phaseRef.current, amps, null, false);
           }
           if (now - lastValidRef.current > 300 && now - lastSetRef.current > 100) {
             setReading(null);
@@ -676,47 +783,11 @@ function Tuner() {
           {/* Strobe display */}
           {mode === "strobe" && (
             <div style={{ textAlign: "center" }}>
-              <div style={{ position: "relative", width: "140px", height: "140px", margin: "0.75rem auto" }}>
-                {/* Strobe disc */}
-                <div
-                  ref={discRef}
-                  aria-hidden="true"
-                  style={{
-                    width: "140px",
-                    height: "140px",
-                    borderRadius: "50%",
-                    border: `1px solid ${C.ruleDk}`,
-                    background: `repeating-conic-gradient(${C.ink} 0deg 15deg, transparent 15deg 30deg)`,
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                  }}
-                />
-                {/* Inner hole overlay */}
-                <div style={{
-                  position: "absolute",
-                  top: "50%",
-                  left: "50%",
-                  transform: "translate(-50%, -50%)",
-                  width: "64px",
-                  height: "64px",
-                  borderRadius: "50%",
-                  background: C.paper,
-                  border: `1px solid ${C.rule}`,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}>
-                  <span style={{
-                    fontFamily: F.display,
-                    fontSize: "1.3rem",
-                    fontWeight: 700,
-                    color: reading && Math.abs(cents) <= 5 ? C.pass : C.ink,
-                  }}>
-                    {reading ? `${reading.name}${reading.octave}` : "—"}
-                  </span>
-                </div>
-              </div>
+              <canvas
+                ref={canvasRef}
+                aria-hidden="true"
+                style={{ width: "160px", height: "160px", display: "block", margin: "0.75rem auto" }}
+              />
               <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", color: C.inkFaint, letterSpacing: "0.08em", marginTop: "0.25rem" }}>
                 {reading
                   ? `${cents > 0 ? "+" : ""}${cents} cents · ${reading.freq} Hz`

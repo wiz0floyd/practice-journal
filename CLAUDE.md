@@ -40,6 +40,8 @@ Three buckets with review intervals — **Hot** (every session), **Warm** (every
 
 String state machine via `view`: `dash → assess → result → dash` (abort returns directly to `dash`). Repertoire editor is a parallel branch: `dash ↔ repertoire`. Each view is an early-return `if` branch inside `App`.
 
+**Verification navigation:** `Tuner`, `Metronome`, and `Recorder` only render in the `assess` view. To reach them when verifying: click "Begin session" on the dashboard first, then interact with those components.
+
 ### Recording
 
 `Recorder` uses `ScriptProcessor` (4096-sample buffer, stereo) to accumulate raw PCM into `chunks.current.{L,R}`. On stop, `encodeWAV()` writes a stereo 16-bit WAV blob and vends an object URL. Recordings are session-scoped — they are not persisted to localStorage.
