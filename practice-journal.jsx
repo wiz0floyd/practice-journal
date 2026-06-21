@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { DndContext, closestCenter } from "@dnd-kit/core";
+import { SortableContext, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
-  BUCKET, CRITERIA, DEFAULT_EXCERPTS, DEFAULT_SETTINGS,
+  BUCKET, CRITERIA, DEFAULT_EXCERPTS, DEFAULT_SETTINGS, BERRIES, SEGMENT_TYPES,
   isDue, formatDue, draftValid, emptyDraft, newId, shuffle,
   advanceBucket, bucketSessions, syncCards, KEYS, load, save, getCriteria,
   itemTags, parseTags, isCardPinned, cardMatchesTag, sessionPool, buildQueue,
@@ -63,7 +66,7 @@ const Rule = ({ thick } = {}) => (
 );
 
 function Badge({ bucket }) {
-  const color = { hot: C.hot, warm: C.warm, cold: C.cold }[bucket];
+  const color = { c: C.hot, b: C.warm, a: C.cold }[bucket];
   return (
     <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase", color, border: `1px solid ${color}`, padding: "1px 5px", borderRadius: "1px", display: "inline-block", lineHeight: 1.6 }}>
       {BUCKET[bucket].label}
@@ -1365,7 +1368,77 @@ function PomodoroControls({ pomo }) {
   );
 }
 
-const SAFE_VIEWS = ["dash", "repertoire", "settings", "history"]; // views safe to restore from history state
+// ── DPO sortable row ──────────────────────────────────────────────────────────
+// Must be a module-level component so useSortable hook is not called inside .map()
+
+function DPORow({ row, index, items, cards, updateRow, removeRow }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: row.rowId });
+
+  const it = row.type === "repertoire" ? items.find((x) => x.id === row.itemId) : null;
+  const rowCard = row.type === "repertoire" ? cards.find((c) => c.id === row.itemId) : null;
+
+  const cellStyle = { fontFamily: F.body, fontSize: "0.9rem", color: C.ink, verticalAlign: "top", padding: "0.4rem 0.3rem" };
+  const inputStyle = { fontFamily: F.body, fontSize: "0.9rem", color: C.ink, background: "transparent", border: "none", borderBottom: `1px solid ${C.rule}`, outline: "none", width: "100%", padding: "1px 0" };
+  const numInputStyle = { ...inputStyle, width: "3rem", textAlign: "center" };
+
+  return (
+    <tr
+      ref={setNodeRef}
+      style={{
+        borderBottom: `1px solid ${C.rule}`,
+        opacity: isDragging ? 0.4 : 1,
+        transform: CSS.Transform.toString(transform),
+        transition,
+      }}
+    >
+      <td
+        {...attributes}
+        {...listeners}
+        aria-label="Drag to reorder"
+        style={{ ...cellStyle, cursor: "grab", color: C.inkFaint, fontSize: "1.1rem", userSelect: "none", touchAction: "none", textAlign: "center", width: "1.5rem" }}
+      >⠿</td>
+      <td style={{ ...cellStyle, color: C.inkFaint, textAlign: "center", fontSize: "0.8rem" }}>{index + 1}</td>
+      <td style={cellStyle}>
+        {row.type === "segment" ? (
+          <span style={{ fontFamily: F.stamp, fontSize: "0.62rem", letterSpacing: "0.1em", textTransform: "uppercase", color: C.inkFaint, border: `1px solid ${C.rule}`, padding: "1px 5px", borderRadius: "1px" }}>{row.segmentType}</span>
+        ) : it ? (
+          <div>
+            <span style={{ fontSize: "0.75rem", color: C.inkFaint, fontFamily: F.stamp }}>{it.composer}</span>
+            <br />
+            <span style={{ fontStyle: "italic" }}>{it.title}</span>
+            {rowCard && <span style={{ marginLeft: "0.4rem" }}><Badge bucket={rowCard.bucket} /></span>}
+          </div>
+        ) : (
+          <span style={{ color: C.inkFaint, fontStyle: "italic" }}>unknown item</span>
+        )}
+      </td>
+      <td style={{ ...cellStyle, textAlign: "center" }}>
+        <input
+          type="number" min={1} max={120}
+          value={row.minutes}
+          aria-label="Minutes for this item"
+          onChange={(e) => updateRow(row.rowId, { minutes: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+          style={numInputStyle}
+        />
+      </td>
+      <td style={cellStyle}>
+        <input
+          type="text"
+          placeholder="today's goal…"
+          value={row.strategy}
+          onChange={(e) => updateRow(row.rowId, { strategy: e.target.value })}
+          style={inputStyle}
+        />
+      </td>
+      <td style={{ ...cellStyle, textAlign: "right" }}>
+        <button onClick={() => removeRow(row.rowId)} aria-label="Remove row" style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: "0.85rem", padding: "0 2px" }}>×</button>
+      </td>
+    </tr>
+  );
+}
+
+const SAFE_VIEWS = ["dash", "repertoire", "settings", "history", "plan"]; // views safe to restore from history state
 
 export default function App() {
   useFonts();
@@ -1379,6 +1452,7 @@ export default function App() {
   const pomo = usePomodoro(settings);
   const [sessions,      setSessions]      = useState(() => load(KEYS.sessions, []));
   const [badges,        setBadges]        = useState(() => load(KEYS.badges, {}));
+  const [plans,         setPlans]         = useState(() => load(KEYS.plans, []));
   const [toast,         setToast]         = useState(null);
   const [conflict,      setConflict]      = useState(null);
   const [view,          setView]          = useState("dash");
@@ -1389,6 +1463,8 @@ export default function App() {
   const [sessionLength, setSessionLength] = useState(4);
   const [tagFilter,     setTagFilter]     = useState(null);
   const [sessionNote,   setSessionNote]   = useState("");
+  const [berries,       setBerries]       = useState({});
+  const [draftPlan,     setDraftPlan]     = useState(null);
   const [pendingResume, setPendingResume] = useState(() => load(KEYS.active, null));
   const [syncStatus,    setSyncStatus]    = useState("idle");
 
@@ -1465,6 +1541,10 @@ export default function App() {
       serverDataRef.current[KEYS.badges] = updates[KEYS.badges];
       setBadges(updates[KEYS.badges]);
     }
+    if (updates[KEYS.plans] !== undefined) {
+      serverDataRef.current[KEYS.plans] = updates[KEYS.plans];
+      setPlans(updates[KEYS.plans]);
+    }
   }, []);
 
   const notify = useCallback((message) => setToast({ kind: "info", label: message }), []);
@@ -1507,6 +1587,12 @@ export default function App() {
     if (badges === serverDataRef.current[KEYS.badges]) { delete serverDataRef.current[KEYS.badges]; return; }
     stampAndUpsert(KEYS.badges, badges, userRef.current);
   }, [badges]);
+  useEffect(() => {
+    save(KEYS.plans, plans);
+    if (!isMounted.current) return;
+    if (plans === serverDataRef.current[KEYS.plans]) { delete serverDataRef.current[KEYS.plans]; return; }
+    stampAndUpsert(KEYS.plans, plans, userRef.current);
+  }, [plans]);
   useEffect(() => { isMounted.current = true; }, []);
 
   // ── Sync status listener ──────────────────────────────────────────────────
@@ -1568,12 +1654,47 @@ export default function App() {
   // ── Session ───────────────────────────────────────────────────────────────
 
   const startSession = () => {
-    setQueue(buildQueue(cards, items, tagFilter, sessionLength));
-    setIdx(0); setScores({}); setResult(null);
+    const dueItems = buildQueue(cards, items, tagFilter, sessionLength);
+    const rows = dueItems.map((card) => ({
+      rowId: newId(),
+      type: "repertoire",
+      itemId: card.id,
+      minutes: 10,
+      strategy: "",
+    }));
+    setDraftPlan({
+      id: newId(),
+      date: new Date().toISOString(),
+      totalMinutes: 60,
+      rows,
+    });
+    setIdx(0); setScores({}); setBerries({}); setResult(null);
+    setView("plan");
+  };
+
+  const beginFromPlan = (plan) => {
+    const repertoireRows = plan.rows.filter((r) => r.type === "repertoire");
+    const orderedQueue = repertoireRows
+      .map((r) => cards.find((c) => c.id === r.itemId))
+      .filter(Boolean);
+    setQueue(orderedQueue);
+    setIdx(0); setScores({}); setBerries({}); setResult(null);
+    const savedPlan = { ...plan, date: new Date().toISOString() };
+    setPlans((prev) => [...prev.filter((p) => p.id !== savedPlan.id), savedPlan]);
+    setDraftPlan(savedPlan);
     setView("assess");
   };
 
-  const toggleScore = (id, val) => setScores((p) => ({ ...p, [id]: p[id] === val ? undefined : val }));
+  const toggleScore = (id, val) => {
+    setScores((p) => ({ ...p, [id]: p[id] === val ? undefined : val }));
+    if (val === true) setBerries((p) => ({ ...p, [id]: [] }));
+  };
+
+  const toggleBerry = (criterionId, berry) =>
+    setBerries((p) => {
+      const cur = p[criterionId] ?? [];
+      return { ...p, [criterionId]: cur.includes(berry) ? cur.filter((b) => b !== berry) : [...cur, berry] };
+    });
 
   const allRated = criteria.every((c) => scores[c.id] !== undefined);
 
@@ -1581,11 +1702,20 @@ export default function App() {
     const ups    = criteria.filter((c) => scores[c.id] === true).length;
     const nb     = advanceBucket(card.bucket, ups, criteria.length);
     const failed = criteria.filter((c) => scores[c.id] === false).map((c) => c.label);
+    const failedBerries = Object.fromEntries(
+      criteria
+        .filter((c) => scores[c.id] === false && (berries[c.id] ?? []).length > 0)
+        .map((c) => [c.id, berries[c.id]])
+    );
     setCards((prev) => prev.map((c) => c.id !== card.id ? c : {
       ...c, bucket: nb, sessionsUntilDue: bucketSessions(nb, settings),
-      history: [...c.history, { date: new Date().toISOString(), scores: { ...scores }, ups, bucket: nb, total: criteria.length }],
+      history: [...c.history, {
+        date: new Date().toISOString(), scores: { ...scores }, ups, bucket: nb,
+        total: criteria.length, berries: Object.keys(failedBerries).length ? failedBerries : undefined,
+      }],
     }));
-    setResult({ item, oldBucket: card.bucket, newBucket: nb, ups, failed, total: criteria.length });
+    setResult({ item, oldBucket: card.bucket, newBucket: nb, ups, failed, total: criteria.length, berries: failedBerries });
+    setBerries({});
     setView("result");
   };
 
@@ -1597,7 +1727,7 @@ export default function App() {
       ));
       setSessionNote(""); setView("sessionNote");
     } else {
-      setIdx((i) => i + 1); setScores({}); setView("assess");
+      setIdx((i) => i + 1); setScores({}); setBerries({}); setView("assess");
     }
   };
 
@@ -1628,9 +1758,143 @@ export default function App() {
     if (!draftValid(newDraft)) return;
     const id = newId();
     setItems((prev) => [...prev, { id, composer: newDraft.composer.trim(), title: newDraft.title.trim(), detail: newDraft.detail.trim(), notes: newDraft.notes.trim(), tags: parseTags(newDraft.tags) }]);
-    setCards((prev) => [...prev, { id, bucket: "hot", sessionsUntilDue: 0, history: [] }]);
+    setCards((prev) => [...prev, { id, bucket: "c", sessionsUntilDue: 0, history: [] }]);
     setNewDraft(emptyDraft()); setShowAdd(false);
   };
+
+  // ── Daily Practice Organizer (DPO) ────────────────────────────────────────
+
+  if (view === "plan" && draftPlan) {
+    const plan = draftPlan;
+    const setPlan = setDraftPlan;
+
+    const totalMins = plan.totalMinutes || 0;
+    const practiceMins = Math.round(totalMins * 0.8);
+    const allocatedMins = plan.rows.reduce((s, r) => s + (Number(r.minutes) || 0), 0);
+    const overBudget = allocatedMins > practiceMins;
+
+    const updateRow = (rowId, patch) =>
+      setPlan((p) => ({ ...p, rows: p.rows.map((r) => r.rowId === rowId ? { ...r, ...patch } : r) }));
+    const removeRow = (rowId) =>
+      setPlan((p) => ({ ...p, rows: p.rows.filter((r) => r.rowId !== rowId) }));
+    const handleDragEnd = ({ active, over }) => {
+      if (!over || active.id === over.id) return;
+      setPlan((p) => {
+        const fi = p.rows.findIndex((r) => r.rowId === active.id);
+        const ti = p.rows.findIndex((r) => r.rowId === over.id);
+        return { ...p, rows: arrayMove(p.rows, fi, ti) };
+      });
+    };
+    const addSegment = (segType) =>
+      setPlan((p) => ({
+        ...p,
+        rows: [...p.rows, { rowId: newId(), type: "segment", segmentType: segType, minutes: 10, strategy: "" }],
+      }));
+    const addRepertoireItem = (itemId) =>
+      setPlan((p) => ({
+        ...p,
+        rows: [...p.rows, { rowId: newId(), type: "repertoire", itemId, minutes: 10, strategy: "" }],
+      }));
+
+    const itemsInPlan = new Set(plan.rows.filter((r) => r.type === "repertoire").map((r) => r.itemId));
+    const addableItems = items.filter((it) => !itemsInPlan.has(it.id));
+
+    const cellStyle = { fontFamily: F.body, fontSize: "0.9rem", color: C.ink, verticalAlign: "top", padding: "0.4rem 0.3rem" };
+    const inputStyle = { fontFamily: F.body, fontSize: "0.9rem", color: C.ink, background: "transparent", border: "none", borderBottom: `1px solid ${C.rule}`, outline: "none", width: "100%", padding: "1px 0" };
+    const numInputStyle = { ...inputStyle, width: "3rem", textAlign: "center" };
+
+    return (
+      <Page>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "0.4rem" }}>
+          <button onClick={() => setView("dash")} style={{ background: "none", border: "none", cursor: "pointer", fontFamily: F.body, fontStyle: "italic", fontSize: "0.95rem", color: C.inkFaint, padding: 0 }}>← Journal</button>
+          <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.14em", textTransform: "uppercase", color: C.inkFaint }}>Daily Practice Organizer</p>
+        </div>
+
+        <Rule thick />
+
+        <div style={{ display: "flex", gap: "1rem", alignItems: "baseline", marginBottom: "0.5rem" }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: "0.3rem" }}>
+            <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase", color: C.inkFaint }}>Total time</span>
+            <input
+              type="number" min={1} max={480}
+              value={totalMins}
+              aria-label="Total time available in minutes"
+              onChange={(e) => setPlan((p) => ({ ...p, totalMinutes: Math.max(1, parseInt(e.target.value, 10) || 1) }))}
+              style={{ ...numInputStyle, width: "3.5rem" }}
+            />
+            <span style={{ fontFamily: F.stamp, fontSize: "0.58rem", color: C.inkFaint }}>min</span>
+          </div>
+          <div style={{ fontStyle: "italic", fontSize: "0.9rem", color: C.inkMid }}>
+            Practice time (−20%): <strong style={{ color: C.ink }}>{practiceMins} min</strong>
+          </div>
+        </div>
+
+        <Rule />
+
+        <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={plan.rows.map((r) => r.rowId)} strategy={verticalListSortingStrategy}>
+            <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "0.75rem" }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${C.ruleDk}` }}>
+                  <th style={{ ...cellStyle, width: "1.5rem" }} />
+                  <th style={{ ...cellStyle, width: "1.5rem", color: C.inkFaint, fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: "normal" }}>#</th>
+                  <th style={{ ...cellStyle, color: C.inkFaint, fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: "normal" }}>Item</th>
+                  <th style={{ ...cellStyle, width: "3.5rem", color: C.inkFaint, fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: "normal", textAlign: "center" }}>Min</th>
+                  <th style={{ ...cellStyle, color: C.inkFaint, fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: "normal" }}>Strategy / Goal</th>
+                  <th style={{ ...cellStyle, width: "2rem" }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {plan.rows.map((row, i) => (
+                  <DPORow
+                    key={row.rowId}
+                    row={row}
+                    index={i}
+                    items={items}
+                    cards={cards}
+                    updateRow={updateRow}
+                    removeRow={removeRow}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </SortableContext>
+        </DndContext>
+
+        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem", flexWrap: "wrap" }}>
+          {SEGMENT_TYPES.map((seg) => (
+            <button key={seg} onClick={() => addSegment(seg)} style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase", background: "transparent", border: `1px solid ${C.rule}`, borderRadius: "1px", padding: "2px 7px", cursor: "pointer", color: C.inkMid }}>+ {seg}</button>
+          ))}
+          {addableItems.length > 0 && (
+            <select
+              value=""
+              aria-label="Add repertoire piece"
+              onChange={(e) => { if (e.target.value) addRepertoireItem(e.target.value); }}
+              style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.1em", background: "transparent", border: `1px solid ${C.rule}`, borderRadius: "1px", padding: "2px 5px", color: C.inkMid, cursor: "pointer" }}
+            >
+              <option value="">+ Piece…</option>
+              {addableItems.map((it) => (
+                <option key={it.id} value={it.id}>{it.composer} — {it.title}</option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        <Rule />
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+          <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.1em", color: overBudget ? C.fail : C.inkFaint }}>
+            {allocatedMins} / {practiceMins} min allocated{overBudget ? " — over budget" : ""}
+          </span>
+          <button
+            onClick={() => beginFromPlan(plan)}
+            disabled={plan.rows.filter((r) => r.type === "repertoire").length === 0}
+            style={{ fontFamily: F.display, fontSize: "1rem", padding: "0.65rem 1.2rem", background: plan.rows.filter((r) => r.type === "repertoire").length > 0 ? C.action : "transparent", color: plan.rows.filter((r) => r.type === "repertoire").length > 0 ? C.paperLt : C.inkFaint, border: `1px solid ${plan.rows.filter((r) => r.type === "repertoire").length > 0 ? C.action : C.rule}`, borderRadius: "1px", cursor: plan.rows.filter((r) => r.type === "repertoire").length > 0 ? "pointer" : "not-allowed" }}
+          >Begin session →</button>
+        </div>
+      </Page>
+    );
+  }
 
   // ── Dashboard ─────────────────────────────────────────────────────────────
 
@@ -1669,14 +1933,14 @@ export default function App() {
               {
                 value: (
                   <span>
-                    <span style={{ color: C.hot }}>{stats.buckets.hot}</span>
+                    <span style={{ color: C.hot }}>{stats.buckets.c}</span>
                     {" · "}
-                    <span style={{ color: C.warm }}>{stats.buckets.warm}</span>
+                    <span style={{ color: C.warm }}>{stats.buckets.b}</span>
                     {" · "}
-                    <span style={{ color: C.cold }}>{stats.buckets.cold}</span>
+                    <span style={{ color: C.cold }}>{stats.buckets.a}</span>
                   </span>
                 ),
-                label: "buckets",
+                label: "categories",
               },
             ].map(({ value, label }) => (
               <div key={label} style={{ textAlign: "center" }}>
@@ -2176,7 +2440,7 @@ export default function App() {
               <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.08em", color: C.inkFaint }}>
                 {(c.history ?? []).length} assessments
                 {transitions.length > 1 && (
-                  <span> · {transitions.map((b) => BUCKET[b].label).join(" → ")}</span>
+                  <span> · {transitions.map((b) => { const k = {hot:"c",warm:"b",cold:"a"}[b] ?? b; return BUCKET[k]?.label ?? b; }).join(" → ")}</span>
                 )}
               </p>
               <RecordingList itemId={it.id} user={user} />
@@ -2376,6 +2640,16 @@ export default function App() {
           <div style={{ marginTop: "0.2rem", flexShrink: 0, marginLeft: "0.75rem" }}><Badge bucket={card.bucket} /></div>
         </div>
 
+        {(() => {
+          const planRow = draftPlan?.rows?.find((r) => r.type === "repertoire" && r.itemId === item.id);
+          return planRow?.strategy?.trim() ? (
+            <div style={{ marginTop: "0.6rem", paddingLeft: "0.75rem", borderLeft: `2px solid ${C.action}` }}>
+              <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.2rem" }}>Today's goal</p>
+              <p style={{ fontStyle: "italic", fontFamily: F.body, fontSize: "0.95rem", color: C.inkMid }}>{planRow.strategy}</p>
+            </div>
+          ) : null;
+        })()}
+
         {item.notes && (
           <div style={{ marginTop: "0.6rem", paddingLeft: "0.75rem", borderLeft: `2px solid ${C.rule}` }}>
             <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.2rem" }}>Notes</p>
@@ -2384,21 +2658,41 @@ export default function App() {
         )}
 
         <Rule thick />
-        <p style={{ fontStyle: "italic", fontSize: "0.95rem", color: C.inkMid, marginBottom: "1rem" }}>Play through cold, then mark each criterion:</p>
+        <p style={{ fontStyle: "italic", fontSize: "0.95rem", color: C.inkMid, marginBottom: "1rem" }}>Play through once, then mark each criterion:</p>
 
         <div style={{ marginBottom: "1.5rem" }}>
-          {criteria.map((c, i) => (
-            <div key={c.id}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.65rem 0" }}>
-                <span style={{ fontSize: "1.1rem", color: C.ink }}>{c.label}</span>
-                <div style={{ display: "flex", gap: "0.4rem" }}>
-                  <MarkButton active={scores[c.id] === true}  variant="pass" label={c.label} onClick={() => toggleScore(c.id, true)}>✓</MarkButton>
-                  <MarkButton active={scores[c.id] === false} variant="fail" label={c.label} onClick={() => toggleScore(c.id, false)}>✗</MarkButton>
+          {criteria.map((c, i) => {
+            const failed = scores[c.id] === false;
+            const berryList = BERRIES[c.id] ?? [];
+            const selectedBerries = berries[c.id] ?? [];
+            return (
+              <div key={c.id}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.65rem 0" }}>
+                  <span style={{ fontSize: "1.1rem", color: C.ink }}>{c.label}</span>
+                  <div style={{ display: "flex", gap: "0.4rem" }}>
+                    <MarkButton active={scores[c.id] === true}  variant="pass" label={c.label} onClick={() => toggleScore(c.id, true)}>✓</MarkButton>
+                    <MarkButton active={scores[c.id] === false} variant="fail" label={c.label} onClick={() => toggleScore(c.id, false)}>✗</MarkButton>
+                  </div>
                 </div>
+                {failed && berryList.length > 0 && (
+                  <div style={{ paddingBottom: "0.5rem", paddingLeft: "0.25rem" }}>
+                    <p style={{ fontFamily: F.stamp, fontSize: "0.52rem", letterSpacing: "0.1em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.3rem" }}>Specify weakness (optional):</p>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+                      {berryList.map((berry) => (
+                        <button
+                          key={berry}
+                          onClick={() => toggleBerry(c.id, berry)}
+                          aria-pressed={selectedBerries.includes(berry)}
+                          style={{ fontFamily: F.stamp, fontSize: "0.58rem", letterSpacing: "0.08em", background: selectedBerries.includes(berry) ? C.action : "transparent", color: selectedBerries.includes(berry) ? C.paperLt : C.inkMid, border: `1px solid ${selectedBerries.includes(berry) ? C.action : C.rule}`, borderRadius: "1px", padding: "2px 7px", cursor: "pointer" }}
+                        >{berry}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {i < criteria.length - 1 && <div style={{ borderTop: `1px solid ${C.rule}` }} />}
               </div>
-              {i < criteria.length - 1 && <div style={{ borderTop: `1px solid ${C.rule}` }} />}
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <button onClick={submit} disabled={!allRated} style={{ width: "100%", fontFamily: F.display, fontSize: "1rem", padding: "0.75rem", background: allRated ? C.action : "transparent", color: allRated ? C.paperLt : C.inkFaint, border: `1px solid ${allRated ? C.action : C.rule}`, borderRadius: "1px", cursor: allRated ? "pointer" : "not-allowed" }}>
@@ -2434,7 +2728,7 @@ export default function App() {
   // ── Result ────────────────────────────────────────────────────────────────
 
   if (view === "result" && result) {
-    const { item, oldBucket, newBucket, ups, failed, total = 4 } = result;
+    const { item, oldBucket, newBucket, ups, failed, total = 4, berries: resultBerries = {} } = result;
     const promoted = BUCKET[oldBucket].up === newBucket;
     const demoted  = BUCKET[oldBucket].dn === newBucket;
     return (
@@ -2461,11 +2755,22 @@ export default function App() {
           {failed.length > 0 ? (
             <>
               <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.6rem" }}>Work on today</p>
-              {failed.map((f) => (
-                <p key={f} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "1.05rem", color: C.fail, marginBottom: "0.3rem" }}>
-                  <span style={{ fontFamily: F.display, fontWeight: 700, fontSize: "0.9rem" }}>✗</span>{f}
-                </p>
-              ))}
+              {failed.map((f) => {
+                const criterionId = criteria.find((c) => c.label === f)?.id;
+                const selectedBerries = criterionId ? (resultBerries[criterionId] ?? []) : [];
+                return (
+                  <div key={f} style={{ marginBottom: "0.5rem" }}>
+                    <p style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "1.05rem", color: C.fail }}>
+                      <span style={{ fontFamily: F.display, fontWeight: 700, fontSize: "0.9rem" }}>✗</span>{f}
+                    </p>
+                    {selectedBerries.length > 0 && (
+                      <p style={{ fontFamily: F.stamp, fontSize: "0.62rem", color: C.inkMid, paddingLeft: "1.5rem", letterSpacing: "0.05em" }}>
+                        {selectedBerries.join(" · ")}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
             </>
           ) : (
             <p style={{ fontStyle: "italic", fontSize: "1.05rem", color: C.pass }}>Clean pass — all criteria met.</p>

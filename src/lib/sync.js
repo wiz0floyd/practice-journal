@@ -5,7 +5,7 @@ const TABLE = "user_data";
 
 // ── Synced keys (meta / active / migrated never sync) ────────────────────────
 
-export const SYNC_KEYS = [KEYS.items, KEYS.cards, KEYS.context, KEYS.settings, KEYS.sessions, KEYS.badges];
+export const SYNC_KEYS = [KEYS.items, KEYS.cards, KEYS.context, KEYS.settings, KEYS.sessions, KEYS.badges, KEYS.plans];
 
 // ── Pure helpers (testable) ───────────────────────────────────────────────────
 

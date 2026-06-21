@@ -56,82 +56,83 @@ describe('draftValid', () => {
 })
 
 describe('advanceBucket', () => {
-  // hot: up=warm, dn=null (floor)
-  it('promotes hot → warm on 4/4', () => {
-    expect(advanceBucket('hot', 4)).toBe('warm')
+  // c (Needs Work): up=b, dn=null (floor)
+  it('promotes c → b on 4/4', () => {
+    expect(advanceBucket('c', 4)).toBe('b')
   })
-  it('keeps hot on 3/4', () => {
-    expect(advanceBucket('hot', 3)).toBe('hot')
+  it('keeps c on 3/4', () => {
+    expect(advanceBucket('c', 3)).toBe('c')
   })
-  it('keeps hot on ≤2 (no lower bucket)', () => {
-    expect(advanceBucket('hot', 2)).toBe('hot')
-    expect(advanceBucket('hot', 0)).toBe('hot')
-  })
-
-  // warm: up=cold, dn=hot
-  it('promotes warm → cold on 4/4', () => {
-    expect(advanceBucket('warm', 4)).toBe('cold')
-  })
-  it('keeps warm on 3/4', () => {
-    expect(advanceBucket('warm', 3)).toBe('warm')
-  })
-  it('demotes warm → hot on ≤2', () => {
-    expect(advanceBucket('warm', 2)).toBe('hot')
-    expect(advanceBucket('warm', 0)).toBe('hot')
+  it('keeps c on ≤2 (no lower category)', () => {
+    expect(advanceBucket('c', 2)).toBe('c')
+    expect(advanceBucket('c', 0)).toBe('c')
   })
 
-  // cold: up=null (ceiling), dn=warm
-  it('keeps cold on 4/4 (no higher bucket)', () => {
-    expect(advanceBucket('cold', 4)).toBe('cold')
+  // b (In Progress): up=a, dn=c
+  it('promotes b → a on 4/4', () => {
+    expect(advanceBucket('b', 4)).toBe('a')
   })
-  it('keeps cold on 3/4', () => {
-    expect(advanceBucket('cold', 3)).toBe('cold')
+  it('keeps b on 3/4', () => {
+    expect(advanceBucket('b', 3)).toBe('b')
   })
-  it('demotes cold → warm on ≤2', () => {
-    expect(advanceBucket('cold', 2)).toBe('warm')
-    expect(advanceBucket('cold', 0)).toBe('warm')
+  it('demotes b → c on ≤2', () => {
+    expect(advanceBucket('b', 2)).toBe('c')
+    expect(advanceBucket('b', 0)).toBe('c')
+  })
+
+  // a (Performance-Ready): up=null (ceiling), dn=b
+  it('keeps a on 4/4 (no higher category)', () => {
+    expect(advanceBucket('a', 4)).toBe('a')
+  })
+  it('keeps a on 3/4', () => {
+    expect(advanceBucket('a', 3)).toBe('a')
+  })
+  it('demotes a → b on ≤2', () => {
+    expect(advanceBucket('a', 2)).toBe('b')
+    expect(advanceBucket('a', 0)).toBe('b')
   })
 })
 
 describe('bucketSessions', () => {
   it('returns built-in defaults when settings are missing', () => {
-    expect(bucketSessions('hot', undefined)).toBe(1)
-    expect(bucketSessions('warm', null)).toBe(2)
-    expect(bucketSessions('cold', {})).toBe(3)
+    expect(bucketSessions('c', undefined)).toBe(1)
+    expect(bucketSessions('b', null)).toBe(2)
+    expect(bucketSessions('a', {})).toBe(3)
   })
   it('returns defaults from DEFAULT_SETTINGS', () => {
-    expect(bucketSessions('hot', DEFAULT_SETTINGS)).toBe(1)
-    expect(bucketSessions('warm', DEFAULT_SETTINGS)).toBe(2)
-    expect(bucketSessions('cold', DEFAULT_SETTINGS)).toBe(3)
+    expect(bucketSessions('c', DEFAULT_SETTINGS)).toBe(1)
+    expect(bucketSessions('b', DEFAULT_SETTINGS)).toBe(2)
+    expect(bucketSessions('a', DEFAULT_SETTINGS)).toBe(3)
   })
   it('honors user overrides', () => {
-    const s = { intervals: { hot: 2, warm: 4, cold: 7 } }
-    expect(bucketSessions('hot', s)).toBe(2)
-    expect(bucketSessions('warm', s)).toBe(4)
-    expect(bucketSessions('cold', s)).toBe(7)
+    const s = { intervals: { c: 2, b: 4, a: 7 } }
+    expect(bucketSessions('c', s)).toBe(2)
+    expect(bucketSessions('b', s)).toBe(4)
+    expect(bucketSessions('a', s)).toBe(7)
   })
   it('clamps to 1–9 and falls back on invalid values', () => {
-    expect(bucketSessions('hot', { intervals: { hot: 99 } })).toBe(9)
-    expect(bucketSessions('hot', { intervals: { hot: 0 } })).toBe(1)
-    expect(bucketSessions('hot', { intervals: { hot: -3 } })).toBe(1)
-    expect(bucketSessions('warm', { intervals: { warm: 'abc' } })).toBe(2)
+    expect(bucketSessions('c', { intervals: { c: 99 } })).toBe(9)
+    expect(bucketSessions('c', { intervals: { c: 0 } })).toBe(1)
+    expect(bucketSessions('c', { intervals: { c: -3 } })).toBe(1)
+    expect(bucketSessions('b', { intervals: { b: 'abc' } })).toBe(2)
   })
 })
 
 describe('syncCards', () => {
   const makeItem = (id) => ({ id, composer: 'X', title: 'Y', detail: '' })
-  const makeCard = (id, bucket = 'hot') => ({ id, bucket, sessionsUntilDue: 0, history: [] })
+  const makeCard = (id, bucket = 'c') => ({ id, bucket, sessionsUntilDue: 0, history: [] })
 
   it('creates new cards for items with no existing card', () => {
     const result = syncCards([makeItem('a')], [])
     expect(result).toHaveLength(1)
-    expect(result[0]).toMatchObject({ id: 'a', bucket: 'hot', sessionsUntilDue: 0 })
+    expect(result[0]).toMatchObject({ id: 'a', bucket: 'c', sessionsUntilDue: 0 })
   })
 
-  it('preserves existing card state', () => {
+  it('preserves existing card state (and migrates legacy bucket)', () => {
+    // Legacy 'cold' is migrated to 'a' by syncCards
     const card = { id: 'a', bucket: 'cold', sessionsUntilDue: 2, history: [{ date: 'x' }] }
     const result = syncCards([makeItem('a')], [card])
-    expect(result[0].bucket).toBe('cold')
+    expect(result[0].bucket).toBe('a')
     expect(result[0].sessionsUntilDue).toBe(2)
     expect(result[0].history).toHaveLength(1)
   })
@@ -390,29 +391,29 @@ describe('buildQueue', () => {
 describe('advanceBucket proportional', () => {
   // total = 6
   it('promotes on 5/6 (>0.75)', () => {
-    expect(advanceBucket('hot', 5, 6)).toBe('warm')
+    expect(advanceBucket('c', 5, 6)).toBe('b')
   })
   it('keeps unchanged on 4/6 (>0.5, ≤0.75)', () => {
-    expect(advanceBucket('hot', 4, 6)).toBe('hot')
+    expect(advanceBucket('c', 4, 6)).toBe('c')
   })
   it('demotes on 3/6 (≤0.5)', () => {
-    expect(advanceBucket('warm', 3, 6)).toBe('hot')
+    expect(advanceBucket('b', 3, 6)).toBe('c')
   })
 
   // total = 2
   it('promotes on 2/2 (>0.75)', () => {
-    expect(advanceBucket('hot', 2, 2)).toBe('warm')
+    expect(advanceBucket('c', 2, 2)).toBe('b')
   })
   it('demotes on 1/2 (=0.5, ≤0.5)', () => {
-    expect(advanceBucket('warm', 1, 2)).toBe('hot')
+    expect(advanceBucket('b', 1, 2)).toBe('c')
   })
 
   // total = 1
   it('promotes on 1/1 (>0.75)', () => {
-    expect(advanceBucket('hot', 1, 1)).toBe('warm')
+    expect(advanceBucket('c', 1, 1)).toBe('b')
   })
   it('demotes on 0/1 (=0, ≤0.5)', () => {
-    expect(advanceBucket('warm', 0, 1)).toBe('hot')
+    expect(advanceBucket('b', 0, 1)).toBe('c')
   })
 })
 
@@ -490,7 +491,7 @@ describe('weeklyStats', () => {
   const prevSunday = new Date(2025, 5, 8, 23, 59)
 
   const mkItem = (id) => ({ id })
-  const mkCard = (id, bucket = 'hot') => ({ id, bucket, sessionsUntilDue: 0, history: [] })
+  const mkCard = (id, bucket = 'c') => ({ id, bucket, sessionsUntilDue: 0, history: [] })
 
   it('counts sessions within the Monday-start week', () => {
     const sessions = [
@@ -522,16 +523,16 @@ describe('weeklyStats', () => {
 
   it('counts bucket distribution from cards matching items', () => {
     const items = [mkItem('a'), mkItem('b'), mkItem('c')]
-    const cards = [mkCard('a', 'hot'), mkCard('b', 'warm'), mkCard('c', 'cold'), mkCard('orphan', 'hot')]
+    const cards = [mkCard('a', 'c'), mkCard('b', 'b'), mkCard('c', 'a'), mkCard('orphan', 'c')]
     const stats = weeklyStats([], cards, items, monday)
-    expect(stats.buckets).toEqual({ hot: 1, warm: 1, cold: 1 })
+    expect(stats.buckets).toEqual({ c: 1, b: 1, a: 1 })
   })
 
   it('ignores orphan cards (no matching item) in bucket counts', () => {
     const items = [mkItem('a')]
-    const cards = [mkCard('a', 'hot'), mkCard('b', 'hot')]
+    const cards = [mkCard('a', 'c'), mkCard('b', 'c')]
     const stats = weeklyStats([], cards, items, monday)
-    expect(stats.buckets.hot).toBe(1)
+    expect(stats.buckets.c).toBe(1)
   })
 
   it('includes streak in result', () => {
