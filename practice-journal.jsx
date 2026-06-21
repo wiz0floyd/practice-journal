@@ -61,6 +61,30 @@ function useFonts() {
 
 // ── Primitives ────────────────────────────────────────────────────────────────
 
+function NumericInput({ value, min, max, onChange, style, ...props }) {
+  const [raw, setRaw] = useState(String(value));
+  const focused = useRef(false);
+  useEffect(() => { if (!focused.current) setRaw(String(value)); }, [value]);
+  return (
+    <input
+      {...props}
+      type="number"
+      min={min}
+      max={max}
+      value={raw}
+      style={style}
+      onChange={(e) => setRaw(e.target.value)}
+      onFocus={() => { focused.current = true; }}
+      onBlur={() => {
+        focused.current = false;
+        const v = Math.max(min, Math.min(max, parseInt(raw, 10) || min));
+        setRaw(String(v));
+        onChange(v);
+      }}
+    />
+  );
+}
+
 const Rule = ({ thick } = {}) => (
   <div style={{ borderTop: `${thick ? "1.5px" : "1px"} solid ${thick ? C.ruleDk : C.rule}`, margin: thick ? "1.25rem 0" : "0.75rem 0" }} />
 );
@@ -436,14 +460,11 @@ function RecordingsSettings({ settings, setSettings, user }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.65rem 0" }}>
         <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint }}>Takes kept per item</span>
         <div style={{ display: "flex", alignItems: "baseline", gap: "0.5rem" }}>
-          <input
-            type="number" min={1} max={20}
+          <NumericInput
+            min={1} max={20}
             value={recordingLimit(settings)}
             aria-label="Recordings kept per item"
-            onChange={(e) => {
-              const v = Math.max(1, Math.min(20, parseInt(e.target.value, 10) || 1));
-              setSettings((s) => ({ ...s, recordingLimit: v }));
-            }}
+            onChange={(v) => setSettings((s) => ({ ...s, recordingLimit: v }))}
             style={{ fontFamily: F.display, fontSize: "1.1rem", color: C.ink, background: "transparent", border: "none", borderBottom: `1px solid ${C.rule}`, outline: "none", width: "3rem", textAlign: "center", padding: "2px 0" }}
           />
           <span style={{ fontFamily: F.stamp, fontSize: "0.58rem", color: C.inkFaint, letterSpacing: "0.05em" }}>takes</span>
@@ -1415,11 +1436,11 @@ function DPORow({ row, index, items, cards, updateRow, removeRow }) {
         )}
       </td>
       <td style={{ ...cellStyle, textAlign: "center" }}>
-        <input
-          type="number" min={1} max={120}
+        <NumericInput
+          min={1} max={120}
           value={row.minutes}
           aria-label="Minutes for this item"
-          onChange={(e) => updateRow(row.rowId, { minutes: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+          onChange={(v) => updateRow(row.rowId, { minutes: v })}
           style={numInputStyle}
         />
       </td>
@@ -1816,11 +1837,11 @@ export default function App() {
         <div style={{ display: "flex", gap: "1rem", alignItems: "baseline", marginBottom: "0.5rem" }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: "0.3rem" }}>
             <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase", color: C.inkFaint }}>Total time</span>
-            <input
-              type="number" min={1} max={480}
+            <NumericInput
+              min={1} max={480}
               value={totalMins}
               aria-label="Total time available in minutes"
-              onChange={(e) => setPlan((p) => ({ ...p, totalMinutes: Math.max(1, parseInt(e.target.value, 10) || 1) }))}
+              onChange={(v) => setPlan((p) => ({ ...p, totalMinutes: v }))}
               style={{ ...numInputStyle, width: "3.5rem" }}
             />
             <span style={{ fontFamily: F.stamp, fontSize: "0.58rem", color: C.inkFaint }}>min</span>
@@ -2205,14 +2226,11 @@ export default function App() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.65rem 0" }}>
             <Badge bucket={b} />
             <div style={{ display: "flex", alignItems: "baseline", gap: "0.5rem" }}>
-              <input
-                type="number" min={1} max={9}
+              <NumericInput
+                min={1} max={9}
                 value={bucketSessions(b, settings)}
                 aria-label={`${b.charAt(0).toUpperCase() + b.slice(1)} interval`}
-                onChange={(e) => {
-                  const v = Math.max(1, Math.min(9, parseInt(e.target.value, 10) || 1));
-                  setSettings((s) => ({ ...s, intervals: { ...(s.intervals ?? {}), [b]: v } }));
-                }}
+                onChange={(v) => setSettings((s) => ({ ...s, intervals: { ...(s.intervals ?? {}), [b]: v } }))}
                 style={{ fontFamily: F.display, fontSize: "1.1rem", color: C.ink, background: "transparent", border: "none", borderBottom: `1px solid ${C.rule}`, outline: "none", width: "3rem", textAlign: "center", padding: "2px 0" }}
               />
               <span style={{ fontFamily: F.stamp, fontSize: "0.58rem", color: C.inkFaint, letterSpacing: "0.05em" }}>
@@ -2308,14 +2326,11 @@ export default function App() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.65rem 0" }}>
             <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint }}>{label}</span>
             <div style={{ display: "flex", alignItems: "baseline", gap: "0.5rem" }}>
-              <input
-                type="number" min={1} max={120}
+              <NumericInput
+                min={1} max={120}
                 value={pomodoroMinutes(settings, key)}
                 aria-label={ariaLabel}
-                onChange={(e) => {
-                  const v = Math.max(1, Math.min(120, parseInt(e.target.value, 10) || 1));
-                  setSettings((s) => ({ ...s, pomodoro: { ...(s.pomodoro ?? {}), [key]: v } }));
-                }}
+                onChange={(v) => setSettings((s) => ({ ...s, pomodoro: { ...(s.pomodoro ?? {}), [key]: v } }))}
                 style={{ fontFamily: F.display, fontSize: "1.1rem", color: C.ink, background: "transparent", border: "none", borderBottom: `1px solid ${C.rule}`, outline: "none", width: "3rem", textAlign: "center", padding: "2px 0" }}
               />
               <span style={{ fontFamily: F.stamp, fontSize: "0.58rem", color: C.inkFaint, letterSpacing: "0.05em" }}>min</span>
