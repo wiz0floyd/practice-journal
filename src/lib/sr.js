@@ -21,23 +21,27 @@ export const DEFAULT_EXCERPTS = [
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-export const BUCKET = {
-  hot:  { label: "Hot",  sessions: 1, up: "warm", dn: null   },
-  warm: { label: "Warm", sessions: 2, up: "cold", dn: "hot"  },
-  cold: { label: "Cold", sessions: 3, up: null,   dn: "warm" },
+// Kaplan repertoire categories: c = Needs Work, b = In Progress, a = Performance-Ready
+export const CATEGORY = {
+  c: { label: "Needs Work",         sessions: 1, up: "b",    dn: null },
+  b: { label: "In Progress",        sessions: 2, up: "a",    dn: "c"  },
+  a: { label: "Performance-Ready",  sessions: 3, up: null,   dn: "b"  },
 };
 
+// Legacy alias so any code that imported BUCKET still compiles during migration
+export const BUCKET = CATEGORY;
+
 export const DEFAULT_SETTINGS = {
-  intervals:        { hot: 1, warm: 2, cold: 3 },
+  intervals:        { c: 1, b: 2, a: 3 },
   pomodoro:         { work: 25, break: 5 },
   recordingLimit:   5,
   recordingStorage: "local",
 };
 
-/** Sessions between reviews for a bucket, honoring user settings (clamped 1–9). */
+/** Sessions between reviews for a category, honoring user settings (clamped 1–9). */
 export const bucketSessions = (bucket, settings) => {
   const n = Number(settings?.intervals?.[bucket]);
-  return Number.isFinite(n) && n >= 1 ? Math.min(Math.round(n), 9) : BUCKET[bucket].sessions;
+  return Number.isFinite(n) && n >= 1 ? Math.min(Math.round(n), 9) : (CATEGORY[bucket]?.sessions ?? 1);
 };
 
 export const CRITERIA = [
@@ -46,6 +50,21 @@ export const CRITERIA = [
   { id: "tone",       label: "Tone"       },
   { id: "expression", label: "Expression" },
 ];
+
+// Sub-elements ("berries") for each criterion — labels only (refer to the book for definitions)
+export const BERRIES = {
+  intonation: ["Pitch", "Tonal support", "Confidence", "Melodic expression",
+               "Harmonic expression", "Vibrato", "Voicing", "Key organization", "Mood"],
+  rhythm:     ["Evenness", "Flow", "Pacing", "Direction", "Pulse", "Articulation",
+               "Tempo", "Metric stress", "Energy", "Character", "Playfulness"],
+  tone:       ["Clarity", "Focus", "Support", "Core", "Consistency", "Depth",
+               "Resonance", "Color", "Style", "Richness", "Poignancy", "Edge", "Warmth"],
+  expression: ["Structure", "Phrasing", "Tension & release", "Timing", "Character",
+               "Pacing", "Dynamics", "Tempo", "Articulation", "Form",
+               "Projection", "Imagination", "Color", "Conviction"],
+};
+
+export const SEGMENT_TYPES = ["Warm-up", "Technical", "Repertoire", "Sight-reading", "Cool-down"];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -84,10 +103,17 @@ export const getCriteria = (settings) => {
 };
 
 export const advanceBucket = (cur, ups, total = 4) => {
-  if (ups / total > 0.75) return BUCKET[cur].up ?? cur;
-  if (ups / total <= 0.5) return BUCKET[cur].dn ?? cur;
+  if (ups / total > 0.75) return CATEGORY[cur]?.up ?? cur;
+  if (ups / total <= 0.5) return CATEGORY[cur]?.dn ?? cur;
   return cur;
 };
+
+// Migrate legacy hot/warm/cold bucket values to category keys c/b/a
+const LEGACY_BUCKET_MAP = { hot: "c", warm: "b", cold: "a" };
+export const migrateCard = (card) => ({
+  ...card,
+  bucket: LEGACY_BUCKET_MAP[card.bucket] ?? card.bucket,
+});
 
 // ── Pomodoro / metronome helpers ──────────────────────────────────────────────
 
@@ -182,6 +208,7 @@ export const KEYS = {
   settings: "pj_settings_v1",
   sessions: "pj_sessions_v1",
   badges:   "pj_badges_v1",
+  plans:    "pj_plans_v1",
   meta:     "pj_meta_v1",
   active:   "pj_active_session_v1",
   migrated: "pj_migrated_v1",
@@ -207,14 +234,17 @@ export const streakDays = (sessions, now = new Date()) => {
 };
 
 export const weeklyStats = (sessions, cards, items, now = new Date()) => {
-  const day = now.getDay(); // 0=Sun, 1=Mon, ...6=Sat
+  const day = now.getDay();
   const daysSinceMonday = (day + 6) % 7;
   const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysSinceMonday);
   const thisSessions = sessions.filter((s) => { const d = new Date(s.date); return d >= weekStart && d <= now; });
   const itemSet = new Set(thisSessions.flatMap((s) => s.itemIds ?? []));
   const itemIds = new Set(items.map((i) => i.id));
-  const buckets = { hot: 0, warm: 0, cold: 0 };
-  for (const c of cards) { if (itemIds.has(c.id) && buckets[c.bucket] !== undefined) buckets[c.bucket]++; }
+  const buckets = { c: 0, b: 0, a: 0 };
+  for (const card of cards) {
+    const cat = LEGACY_BUCKET_MAP[card.bucket] ?? card.bucket;
+    if (itemIds.has(card.id) && buckets[cat] !== undefined) buckets[cat]++;
+  }
   return {
     sessionsThisWeek: thisSessions.length,
     itemsThisWeek:    itemSet.size,
@@ -224,12 +254,12 @@ export const weeklyStats = (sessions, cards, items, now = new Date()) => {
 };
 
 export const BADGES = [
-  { id: "first_session", label: "First Session", desc: "Logged your first session" },
-  { id: "streak_7",      label: "Week Streak",   desc: "Practiced 7 days in a row" },
-  { id: "streak_30",     label: "Month Streak",  desc: "Practiced 30 days in a row" },
-  { id: "first_cold",    label: "Ice Cold",      desc: "An item reached Cold" },
-  { id: "all_warm",      label: "Warmed Up",     desc: "Every item Warm or better" },
-  { id: "sessions_100",  label: "Centurion",     desc: "Logged 100 sessions" },
+  { id: "first_session", label: "First Session",      desc: "Logged your first session" },
+  { id: "streak_7",      label: "Week Streak",        desc: "Practiced 7 days in a row" },
+  { id: "streak_30",     label: "Month Streak",       desc: "Practiced 30 days in a row" },
+  { id: "first_cold",    label: "Performance-Ready",  desc: "An item reached Performance-Ready" },
+  { id: "all_warm",      label: "In Progress",        desc: "Every item In Progress or better" },
+  { id: "sessions_100",  label: "Centurion",          desc: "Logged 100 sessions" },
 ];
 
 export const computeBadges = (sessions, cards, now = new Date()) => {
@@ -238,8 +268,9 @@ export const computeBadges = (sessions, cards, now = new Date()) => {
   const streak = streakDays(sessions, now);
   if (streak >= 7)             earned.push("streak_7");
   if (streak >= 30)            earned.push("streak_30");
-  if (cards.some((c) => c.bucket === "cold"))                        earned.push("first_cold");
-  if (cards.length > 0 && !cards.some((c) => c.bucket === "hot"))   earned.push("all_warm");
+  const normalized = cards.map((c) => ({ ...c, bucket: LEGACY_BUCKET_MAP[c.bucket] ?? c.bucket }));
+  if (normalized.some((c) => c.bucket === "a"))                          earned.push("first_cold");
+  if (normalized.length > 0 && !normalized.some((c) => c.bucket === "c")) earned.push("all_warm");
   if (sessions.length >= 100)  earned.push("sessions_100");
   return earned;
 };
@@ -275,9 +306,9 @@ export const restoreQueue = (queueIds, cards) => (queueIds ?? []).map((id) => ca
 
 export const syncCards = (items, cards) => {
   const ids     = new Set(items.map((e) => e.id));
-  const kept    = cards.filter((c) => ids.has(c.id));
+  const kept    = cards.filter((c) => ids.has(c.id)).map(migrateCard);
   const haveIds = new Set(kept.map((c) => c.id));
   const added   = items.filter((e) => !haveIds.has(e.id))
-    .map((e) => ({ id: e.id, bucket: "hot", sessionsUntilDue: 0, history: [] }));
+    .map((e) => ({ id: e.id, bucket: "c", sessionsUntilDue: 0, history: [] }));
   return [...kept, ...added];
 };

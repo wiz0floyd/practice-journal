@@ -63,7 +63,7 @@ const Rule = ({ thick } = {}) => (
 );
 
 function Badge({ bucket }) {
-  const color = { hot: C.hot, warm: C.warm, cold: C.cold }[bucket];
+  const color = { c: C.hot, b: C.warm, a: C.cold }[bucket];
   return (
     <span style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase", color, border: `1px solid ${color}`, padding: "1px 5px", borderRadius: "1px", display: "inline-block", lineHeight: 1.6 }}>
       {BUCKET[bucket].label}
@@ -1628,7 +1628,7 @@ export default function App() {
     if (!draftValid(newDraft)) return;
     const id = newId();
     setItems((prev) => [...prev, { id, composer: newDraft.composer.trim(), title: newDraft.title.trim(), detail: newDraft.detail.trim(), notes: newDraft.notes.trim(), tags: parseTags(newDraft.tags) }]);
-    setCards((prev) => [...prev, { id, bucket: "hot", sessionsUntilDue: 0, history: [] }]);
+    setCards((prev) => [...prev, { id, bucket: "c", sessionsUntilDue: 0, history: [] }]);
     setNewDraft(emptyDraft()); setShowAdd(false);
   };
 
@@ -1669,14 +1669,14 @@ export default function App() {
               {
                 value: (
                   <span>
-                    <span style={{ color: C.hot }}>{stats.buckets.hot}</span>
+                    <span style={{ color: C.hot }}>{stats.buckets.c}</span>
                     {" · "}
-                    <span style={{ color: C.warm }}>{stats.buckets.warm}</span>
+                    <span style={{ color: C.warm }}>{stats.buckets.b}</span>
                     {" · "}
-                    <span style={{ color: C.cold }}>{stats.buckets.cold}</span>
+                    <span style={{ color: C.cold }}>{stats.buckets.a}</span>
                   </span>
                 ),
-                label: "buckets",
+                label: "categories",
               },
             ].map(({ value, label }) => (
               <div key={label} style={{ textAlign: "center" }}>
@@ -2176,7 +2176,7 @@ export default function App() {
               <p style={{ fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.08em", color: C.inkFaint }}>
                 {(c.history ?? []).length} assessments
                 {transitions.length > 1 && (
-                  <span> · {transitions.map((b) => BUCKET[b].label).join(" → ")}</span>
+                  <span> · {transitions.map((b) => { const k = {hot:"c",warm:"b",cold:"a"}[b] ?? b; return BUCKET[k]?.label ?? b; }).join(" → ")}</span>
                 )}
               </p>
               <RecordingList itemId={it.id} user={user} />
@@ -2384,7 +2384,7 @@ export default function App() {
         )}
 
         <Rule thick />
-        <p style={{ fontStyle: "italic", fontSize: "0.95rem", color: C.inkMid, marginBottom: "1rem" }}>Play through cold, then mark each criterion:</p>
+        <p style={{ fontStyle: "italic", fontSize: "0.95rem", color: C.inkMid, marginBottom: "1rem" }}>Play through once, then mark each criterion:</p>
 
         <div style={{ marginBottom: "1.5rem" }}>
           {criteria.map((c, i) => (
