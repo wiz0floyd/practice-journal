@@ -1404,10 +1404,11 @@ function DPORow({ row, index, items, cards, updateRow, removeRow }) {
           <span style={{ fontFamily: F.stamp, fontSize: "0.62rem", letterSpacing: "0.1em", textTransform: "uppercase", color: C.inkFaint, border: `1px solid ${C.rule}`, padding: "1px 5px", borderRadius: "1px" }}>{row.segmentType}</span>
         ) : it ? (
           <div>
-            <span style={{ fontSize: "0.75rem", color: C.inkFaint, fontFamily: F.stamp }}>{it.composer}</span>
-            <br />
-            <span style={{ fontStyle: "italic" }}>{it.title}</span>
-            {rowCard && <span style={{ marginLeft: "0.4rem" }}><Badge bucket={rowCard.bucket} /></span>}
+            <span>
+              <span style={{ fontStyle: "italic" }}>{it.composer} — {it.title}</span>
+              {rowCard && <span style={{ marginLeft: "0.4rem" }}><Badge bucket={rowCard.bucket} /></span>}
+            </span>
+            {it.detail && <span style={{ display: "block", fontSize: "0.75rem", color: C.inkFaint, fontFamily: F.stamp, marginTop: "0.05rem" }}>{it.detail}</span>}
           </div>
         ) : (
           <span style={{ color: C.inkFaint, fontStyle: "italic" }}>unknown item</span>
@@ -1874,7 +1875,7 @@ export default function App() {
             >
               <option value="">+ Piece…</option>
               {addableItems.map((it) => (
-                <option key={it.id} value={it.id}>{it.composer} — {it.title}</option>
+                <option key={it.id} value={it.id}>{it.composer} — {it.title}{it.detail ? ` · ${it.detail}` : ""}</option>
               ))}
             </select>
           )}
@@ -2063,9 +2064,7 @@ export default function App() {
             >
               <div style={{ minWidth: 0 }}>
                 <p style={{ fontSize: "1rem", lineHeight: 1.3, color: C.ink }}>
-                  <span style={{ fontWeight: 600 }}>{it.composer}</span>
-                  <span style={{ color: C.inkFaint }}> · </span>
-                  <span style={{ fontStyle: "italic" }}>{it.title}</span>
+                  <span style={{ fontStyle: "italic" }}>{it.composer} — {it.title}</span>
                 </p>
                 {it.detail && <p style={{ fontSize: "0.85rem", color: C.inkFaint, marginTop: "0.1rem", fontStyle: "italic" }}>{it.detail}</p>}
               </div>
@@ -2414,12 +2413,11 @@ export default function App() {
             <div style={{ padding: "0.75rem 0" }}>
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem", marginBottom: "0.4rem" }}>
                 <p style={{ fontSize: "1rem", lineHeight: 1.3, color: C.ink }}>
-                  <span style={{ fontWeight: 600 }}>{it.composer}</span>
-                  <span style={{ color: C.inkFaint }}> · </span>
-                  <span style={{ fontStyle: "italic" }}>{it.title}</span>
+                  <span style={{ fontStyle: "italic" }}>{it.composer} — {it.title}</span>
                 </p>
                 <div style={{ flexShrink: 0, marginTop: "0.1rem" }}><Badge bucket={c.bucket} /></div>
               </div>
+              {it.detail && <p style={{ fontSize: "0.85rem", color: C.inkFaint, marginTop: "-0.2rem", marginBottom: "0.2rem", fontStyle: "italic" }}>{it.detail}</p>}
               <div style={{ marginBottom: "0.3rem" }}>
                 {last10.length > 0 ? (
                   last10.map((h, i) => {
@@ -2529,9 +2527,7 @@ export default function App() {
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem", padding: "0.65rem 0" }}>
                 <div style={{ minWidth: 0 }}>
                   <p style={{ fontSize: "1rem", lineHeight: 1.3 }}>
-                    <span style={{ fontWeight: 600 }}>{it.composer}</span>
-                    <span style={{ color: C.inkFaint }}> · </span>
-                    <span style={{ fontStyle: "italic" }}>{it.title}</span>
+                    <span style={{ fontStyle: "italic" }}>{it.composer} — {it.title}</span>
                   </p>
                   {it.detail && <p style={{ fontSize: "0.85rem", color: C.inkFaint, marginTop: "0.1rem", fontStyle: "italic" }}>{it.detail}</p>}
                   {itemTags(it).length > 0 && (
@@ -2633,8 +2629,7 @@ export default function App() {
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
-            <p style={{ fontFamily: F.stamp, fontSize: "0.65rem", letterSpacing: "0.12em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.3rem" }}>{item.composer}</p>
-            <h2 style={{ fontFamily: F.display, fontSize: "1.55rem", fontWeight: 700, lineHeight: 1.15, color: C.ink }}>{item.title}</h2>
+            <h2 style={{ fontFamily: F.display, fontSize: "1.55rem", fontWeight: 700, lineHeight: 1.15, color: C.ink }}>{item.composer} — {item.title}</h2>
             {item.detail && <p style={{ fontStyle: "italic", fontSize: "1rem", color: C.inkMid, marginTop: "0.2rem" }}>{item.detail}</p>}
           </div>
           <div style={{ marginTop: "0.2rem", flexShrink: 0, marginLeft: "0.75rem" }}><Badge bucket={card.bucket} /></div>
@@ -2736,8 +2731,7 @@ export default function App() {
         <PomodoroChip pomo={pomo} />
         <p style={{ fontFamily: F.stamp, fontSize: "0.6rem", letterSpacing: "0.14em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "1rem" }}>Assessment</p>
         <Rule thick />
-        <p style={{ fontFamily: F.stamp, fontSize: "0.65rem", letterSpacing: "0.1em", textTransform: "uppercase", color: C.inkFaint, marginBottom: "0.3rem" }}>{item.composer}</p>
-        <h2 style={{ fontFamily: F.display, fontSize: "1.4rem", fontWeight: 700, lineHeight: 1.2, color: C.ink }}>{item.title}</h2>
+        <h2 style={{ fontFamily: F.display, fontSize: "1.4rem", fontWeight: 700, lineHeight: 1.2, color: C.ink }}>{item.composer} — {item.title}</h2>
         {item.detail && <p style={{ fontStyle: "italic", fontSize: "0.95rem", color: C.inkMid, marginTop: "0.15rem", marginBottom: "0.75rem" }}>{item.detail}</p>}
         <Rule />
         <div style={{ marginBottom: "1rem" }}>

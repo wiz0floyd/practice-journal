@@ -1,4 +1,4 @@
-import { supabase } from "./supabase.js";
+import { supabase, APP_ENV } from "./supabase.js";
 import { KEYS, load, save } from "./sr.js";
 
 const TABLE = "user_data";
@@ -105,8 +105,8 @@ export function stampAndUpsert(key, value, user) {
   supabase
     .from(TABLE)
     .upsert(
-      { user_id: user.id, key, value, updated_at: newMeta[key] },
-      { onConflict: "user_id,key" }
+      { user_id: user.id, env: APP_ENV, key, value, updated_at: newMeta[key] },
+      { onConflict: "user_id,env,key" }
     )
     .then(({ error }) => {
       if (error) {
@@ -144,8 +144,8 @@ export async function flushQueue(user) {
     const { error } = await supabase
       .from(TABLE)
       .upsert(
-        push.map((p) => ({ user_id: user.id, key: p.key, value: p.value, updated_at: p.updated_at })),
-        { onConflict: "user_id,key" }
+        push.map((p) => ({ user_id: user.id, env: APP_ENV, key: p.key, value: p.value, updated_at: p.updated_at })),
+        { onConflict: "user_id,env,key" }
       );
     if (error) {
       console.warn("[sync] flush failed:", error.message);
@@ -169,7 +169,8 @@ export async function fetchAllRows(user) {
   const { data, error } = await supabase
     .from(TABLE)
     .select("key, value, updated_at")
-    .eq("user_id", user.id);
+    .eq("user_id", user.id)
+    .eq("env", APP_ENV);
   if (error) {
     console.warn("[sync] fetch failed:", error.message);
     return null;
@@ -220,10 +221,10 @@ export async function uploadAll(user) {
     try { value = JSON.parse(raw); } catch { continue; }
     const ts = meta[key] ?? now;
     newMeta[key] = ts;
-    rows.push({ user_id: user.id, key, value, updated_at: ts });
+    rows.push({ user_id: user.id, env: APP_ENV, key, value, updated_at: ts });
   }
   if (!rows.length) return true;
-  const { error } = await supabase.from(TABLE).upsert(rows, { onConflict: "user_id,key" });
+  const { error } = await supabase.from(TABLE).upsert(rows, { onConflict: "user_id,env,key" });
   if (error) { console.warn("[sync] uploadAll failed:", error.message); return false; }
   save(KEYS.meta, newMeta);
   return true;

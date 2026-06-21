@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working in this repository.
 
+## File discovery
+
+Use the graphify skill to locate files, symbols, and cross-file relationships before spawning Explore agents. A knowledge graph is at `graphify-out/` — run `graphify query "<question>"` to get a scoped subgraph. This is cheaper than Explore for most "where is X" questions.
+
 ## Dev environment
 
 No build toolchain is configured. Scaffold with Vite to run the app:
