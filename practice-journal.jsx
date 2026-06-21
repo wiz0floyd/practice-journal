@@ -1,4 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { DndContext, closestCenter } from "@dnd-kit/core";
+import { SortableContext, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   BUCKET, CRITERIA, DEFAULT_EXCERPTS, DEFAULT_SETTINGS, BERRIES, SEGMENT_TYPES,
   isDue, formatDue, draftValid, emptyDraft, newId, shuffle,
@@ -1365,6 +1368,76 @@ function PomodoroControls({ pomo }) {
   );
 }
 
+// ── DPO sortable row ──────────────────────────────────────────────────────────
+// Must be a module-level component so useSortable hook is not called inside .map()
+
+function DPORow({ row, index, items, cards, updateRow, removeRow }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: row.rowId });
+
+  const it = row.type === "repertoire" ? items.find((x) => x.id === row.itemId) : null;
+  const rowCard = row.type === "repertoire" ? cards.find((c) => c.id === row.itemId) : null;
+
+  const cellStyle = { fontFamily: F.body, fontSize: "0.9rem", color: C.ink, verticalAlign: "top", padding: "0.4rem 0.3rem" };
+  const inputStyle = { fontFamily: F.body, fontSize: "0.9rem", color: C.ink, background: "transparent", border: "none", borderBottom: `1px solid ${C.rule}`, outline: "none", width: "100%", padding: "1px 0" };
+  const numInputStyle = { ...inputStyle, width: "3rem", textAlign: "center" };
+
+  return (
+    <tr
+      ref={setNodeRef}
+      style={{
+        borderBottom: `1px solid ${C.rule}`,
+        opacity: isDragging ? 0.4 : 1,
+        transform: CSS.Transform.toString(transform),
+        transition,
+      }}
+    >
+      <td
+        {...attributes}
+        {...listeners}
+        aria-label="Drag to reorder"
+        style={{ ...cellStyle, cursor: "grab", color: C.inkFaint, fontSize: "1.1rem", userSelect: "none", touchAction: "none", textAlign: "center", width: "1.5rem" }}
+      >⠿</td>
+      <td style={{ ...cellStyle, color: C.inkFaint, textAlign: "center", fontSize: "0.8rem" }}>{index + 1}</td>
+      <td style={cellStyle}>
+        {row.type === "segment" ? (
+          <span style={{ fontFamily: F.stamp, fontSize: "0.62rem", letterSpacing: "0.1em", textTransform: "uppercase", color: C.inkFaint, border: `1px solid ${C.rule}`, padding: "1px 5px", borderRadius: "1px" }}>{row.segmentType}</span>
+        ) : it ? (
+          <div>
+            <span style={{ fontSize: "0.75rem", color: C.inkFaint, fontFamily: F.stamp }}>{it.composer}</span>
+            <br />
+            <span style={{ fontStyle: "italic" }}>{it.title}</span>
+            {rowCard && <span style={{ marginLeft: "0.4rem" }}><Badge bucket={rowCard.bucket} /></span>}
+          </div>
+        ) : (
+          <span style={{ color: C.inkFaint, fontStyle: "italic" }}>unknown item</span>
+        )}
+      </td>
+      <td style={{ ...cellStyle, textAlign: "center" }}>
+        <input
+          type="number" min={1} max={120}
+          value={row.minutes}
+          aria-label="Minutes for this item"
+          onChange={(e) => updateRow(row.rowId, { minutes: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+          style={numInputStyle}
+        />
+      </td>
+      <td style={cellStyle}>
+        <input
+          type="text"
+          placeholder="today's goal…"
+          value={row.strategy}
+          onChange={(e) => updateRow(row.rowId, { strategy: e.target.value })}
+          style={inputStyle}
+        />
+      </td>
+      <td style={{ ...cellStyle, textAlign: "right" }}>
+        <button onClick={() => removeRow(row.rowId)} aria-label="Remove row" style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: "0.85rem", padding: "0 2px" }}>×</button>
+      </td>
+    </tr>
+  );
+}
+
 const SAFE_VIEWS = ["dash", "repertoire", "settings", "history", "plan"]; // views safe to restore from history state
 
 export default function App() {
@@ -1704,15 +1777,14 @@ export default function App() {
       setPlan((p) => ({ ...p, rows: p.rows.map((r) => r.rowId === rowId ? { ...r, ...patch } : r) }));
     const removeRow = (rowId) =>
       setPlan((p) => ({ ...p, rows: p.rows.filter((r) => r.rowId !== rowId) }));
-    const moveRow = (rowId, dir) =>
+    const handleDragEnd = ({ active, over }) => {
+      if (!over || active.id === over.id) return;
       setPlan((p) => {
-        const rows = [...p.rows];
-        const i = rows.findIndex((r) => r.rowId === rowId);
-        const j = i + dir;
-        if (j < 0 || j >= rows.length) return p;
-        [rows[i], rows[j]] = [rows[j], rows[i]];
-        return { ...p, rows };
+        const fi = p.rows.findIndex((r) => r.rowId === active.id);
+        const ti = p.rows.findIndex((r) => r.rowId === over.id);
+        return { ...p, rows: arrayMove(p.rows, fi, ti) };
       });
+    };
     const addSegment = (segType) =>
       setPlan((p) => ({
         ...p,
@@ -1759,65 +1831,35 @@ export default function App() {
 
         <Rule />
 
-        <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "0.75rem" }}>
-          <thead>
-            <tr style={{ borderBottom: `1px solid ${C.ruleDk}` }}>
-              <th style={{ ...cellStyle, width: "1.5rem", color: C.inkFaint, fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: "normal" }}>#</th>
-              <th style={{ ...cellStyle, color: C.inkFaint, fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: "normal" }}>Item</th>
-              <th style={{ ...cellStyle, width: "3.5rem", color: C.inkFaint, fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: "normal", textAlign: "center" }}>Min</th>
-              <th style={{ ...cellStyle, color: C.inkFaint, fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: "normal" }}>Strategy / Goal</th>
-              <th style={{ ...cellStyle, width: "3rem" }}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {plan.rows.map((row, i) => {
-              const it = row.type === "repertoire" ? items.find((x) => x.id === row.itemId) : null;
-              const rowCard = row.type === "repertoire" ? cards.find((c) => c.id === row.itemId) : null;
-              return (
-                <tr key={row.rowId} style={{ borderBottom: `1px solid ${C.rule}` }}>
-                  <td style={{ ...cellStyle, color: C.inkFaint, textAlign: "center", fontSize: "0.8rem" }}>{i + 1}</td>
-                  <td style={cellStyle}>
-                    {row.type === "segment" ? (
-                      <span style={{ fontFamily: F.stamp, fontSize: "0.62rem", letterSpacing: "0.1em", textTransform: "uppercase", color: C.inkFaint, border: `1px solid ${C.rule}`, padding: "1px 5px", borderRadius: "1px" }}>{row.segmentType}</span>
-                    ) : it ? (
-                      <div>
-                        <span style={{ fontSize: "0.75rem", color: C.inkFaint, fontFamily: F.stamp }}>{it.composer}</span>
-                        <br />
-                        <span style={{ fontStyle: "italic" }}>{it.title}</span>
-                        {rowCard && <span style={{ marginLeft: "0.4rem" }}><Badge bucket={rowCard.bucket} /></span>}
-                      </div>
-                    ) : (
-                      <span style={{ color: C.inkFaint, fontStyle: "italic" }}>unknown item</span>
-                    )}
-                  </td>
-                  <td style={{ ...cellStyle, textAlign: "center" }}>
-                    <input
-                      type="number" min={1} max={120}
-                      value={row.minutes}
-                      aria-label="Minutes for this item"
-                      onChange={(e) => updateRow(row.rowId, { minutes: Math.max(1, parseInt(e.target.value, 10) || 1) })}
-                      style={numInputStyle}
-                    />
-                  </td>
-                  <td style={cellStyle}>
-                    <input
-                      type="text"
-                      placeholder="today's goal…"
-                      value={row.strategy}
-                      onChange={(e) => updateRow(row.rowId, { strategy: e.target.value })}
-                      style={inputStyle}
-                    />
-                  </td>
-                  <td style={{ ...cellStyle, textAlign: "right", whiteSpace: "nowrap" }}>
-                    <button onClick={() => moveRow(row.rowId, -1)} disabled={i === 0} aria-label="Move up" style={{ background: "none", border: "none", cursor: i === 0 ? "default" : "pointer", color: i === 0 ? C.inkFaint : C.ink, fontSize: "0.85rem", padding: "0 2px" }}>↑</button>
-                    <button onClick={() => moveRow(row.rowId, 1)} disabled={i === plan.rows.length - 1} aria-label="Move down" style={{ background: "none", border: "none", cursor: i === plan.rows.length - 1 ? "default" : "pointer", color: i === plan.rows.length - 1 ? C.inkFaint : C.ink, fontSize: "0.85rem", padding: "0 2px" }}>↓</button>
-                    <button onClick={() => removeRow(row.rowId)} aria-label="Remove row" style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: "0.85rem", padding: "0 2px" }}>×</button>
-                  </td>
+        <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={plan.rows.map((r) => r.rowId)} strategy={verticalListSortingStrategy}>
+            <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "0.75rem" }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${C.ruleDk}` }}>
+                  <th style={{ ...cellStyle, width: "1.5rem" }} />
+                  <th style={{ ...cellStyle, width: "1.5rem", color: C.inkFaint, fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: "normal" }}>#</th>
+                  <th style={{ ...cellStyle, color: C.inkFaint, fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: "normal" }}>Item</th>
+                  <th style={{ ...cellStyle, width: "3.5rem", color: C.inkFaint, fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: "normal", textAlign: "center" }}>Min</th>
+                  <th style={{ ...cellStyle, color: C.inkFaint, fontFamily: F.stamp, fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: "normal" }}>Strategy / Goal</th>
+                  <th style={{ ...cellStyle, width: "2rem" }}></th>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              </thead>
+              <tbody>
+                {plan.rows.map((row, i) => (
+                  <DPORow
+                    key={row.rowId}
+                    row={row}
+                    index={i}
+                    items={items}
+                    cards={cards}
+                    updateRow={updateRow}
+                    removeRow={removeRow}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </SortableContext>
+        </DndContext>
 
         <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem", flexWrap: "wrap" }}>
           {SEGMENT_TYPES.map((seg) => (
